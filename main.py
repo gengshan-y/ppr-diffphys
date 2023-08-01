@@ -16,11 +16,12 @@ flags.DEFINE_string("seqname", "shiba-haru-1002", "name of the sequence")
 flags.DEFINE_string("logroot", "logdir/", "Root directory for output files")
 flags.DEFINE_string("logname", "dynamics", "Experiment Name")
 flags.DEFINE_float("learning_rate", 2e-4, "learning rate")
-flags.DEFINE_integer("num_epochs", 5, "total update iterations")
+flags.DEFINE_integer("num_rounds", 5, "total update iterations")
 flags.DEFINE_string("urdf_template", "a1", "whether to use predefined skeleton")
 flags.DEFINE_integer("num_freq", 10, "number of freqs in fourier encoding")
 flags.DEFINE_integer("t_embed_dim", 128, "dimension of the pose code")
-flags.DEFINE_integer("iters_per_epoch", 100, "iters per epoch")
+flags.DEFINE_integer("iters_per_round", 100, "iters per epoch")
+flags.DEFINE_float("ratio_phys_cycle", 1.0, "iters per epoch")
 
 
 def main(_):
@@ -35,11 +36,11 @@ def main(_):
     model.cuda()
 
     # opt
-    for it in range(opts["num_epochs"] * opts["iters_per_epoch"] + 1):
-        model.progress = it / (opts["num_epochs"] * opts["iters_per_epoch"])
+    for it in range(opts["num_rounds"] * opts["iters_per_round"] + 1):
+        model.progress = it / (opts["num_rounds"] * opts["iters_per_round"])
 
         # eval
-        if it % opts["iters_per_epoch"] == 0:
+        if it % opts["iters_per_round"] == 0:
             # save net
             model.save_network(epoch_label=it)
 

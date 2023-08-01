@@ -353,16 +353,16 @@ class phys_model(nn.Module):
             self.preset_data(dataloader)
         self.use_dr = use_dr
 
-        # mlp
+        data_dir = "%s/../" % os.path.dirname(__file__)
         if opts["urdf_template"] == "a1":
-            urdf_path = "data/urdf_templates/a1/urdf/a1.urdf"
+            urdf_path = "%s/data/urdf_templates/a1/urdf/a1.urdf" % data_dir
             in_bullet = True
             kp = 220.0
             kd = 2.0
             shape_ke = 1.0e4
             shape_kd = 0
         elif opts["urdf_template"] == "wolf":
-            urdf_path = "data/urdf_templates/wolf.urdf"
+            urdf_path = "%s/data/urdf_templates/wolf.urdf" % data_dir
             in_bullet = False
             self.joint_attach_ke = 32000.0
             self.joint_attach_kd = 100.0
@@ -371,7 +371,7 @@ class phys_model(nn.Module):
             shape_ke = 1000
             shape_kd = 100
         elif opts["urdf_template"] == "wolf_mod":
-            urdf_path = "data/urdf_templates/wolf_mod.urdf"
+            urdf_path = "%s/data/urdf_templates/wolf_mod.urdf" % data_dir
             in_bullet = False
             self.joint_attach_ke = 8000.0
             self.joint_attach_kd = 200.0
@@ -384,7 +384,7 @@ class phys_model(nn.Module):
             # kp=220.
             # kd=2.
         elif opts["urdf_template"] == "laikago":
-            urdf_path = "data/urdf_templates/laikago/laikago.urdf"
+            urdf_path = "%s/data/urdf_templates/laikago/laikago.urdf" % data_dir
             in_bullet = False
             self.joint_attach_ke = 16000.0
             self.joint_attach_kd = 200.0
@@ -393,7 +393,7 @@ class phys_model(nn.Module):
             shape_ke = 1.0e4
             shape_kd = 0
         elif opts["urdf_template"] == "human":
-            urdf_path = "data/urdf_templates/human.urdf"
+            urdf_path = "%s/data/urdf_templates/human.urdf" % data_dir
             in_bullet = False
             self.joint_attach_ke = 64000.0
             self.joint_attach_kd = 150.0  # tune this such that it would not blow up
@@ -402,7 +402,7 @@ class phys_model(nn.Module):
             shape_ke = 1000
             shape_kd = 100
         elif opts["urdf_template"] == "human_mod":
-            urdf_path = "data/urdf_templates/human_mod.urdf"
+            urdf_path = "%s/data/urdf_templates/human_mod.urdf" % data_dir
             in_bullet = False
             self.joint_attach_ke = 8000.0
             self.joint_attach_kd = 200.0
@@ -413,7 +413,7 @@ class phys_model(nn.Module):
             # kp=20.
             # kd=2.
         elif opts["urdf_template"] == "human_amp":
-            urdf_path = "data/urdf_templates/human_amp.urdf"
+            urdf_path = "%s/data/urdf_templates/human_amp.urdf" % data_dir
             in_bullet = False
             kp = 20.0
             kd = 2.0
@@ -680,7 +680,7 @@ class phys_model(nn.Module):
         self.nerf_body_rts = model_dict["nerf_body_rts"]
         self.ks_params = model_dict["ks_params"]
 
-        self.data_offset = self.nerf_body_rts.data_offset
+        self.data_offset = self.nerf_body_rts.time_embedding.frame_offset
         self.samp_int = 0.1
         self.gt_steps = self.data_offset[-1] - 1
         self.gt_steps_visible = self.gt_steps
@@ -795,7 +795,9 @@ class phys_model(nn.Module):
         self.scheduler = torch.optim.lr_scheduler.OneCycleLR(
             self.optimizer,
             list(lr_dict.values()),
-            int(opts["num_epochs"] * 200),
+            int(
+                opts["num_rounds"] * opts["iters_per_round"] * opts["ratio_phys_cycle"]
+            ),
             pct_start=0.02,  # use 2%
             cycle_momentum=False,
             anneal_strategy="linear",
@@ -1287,7 +1289,6 @@ class phys_model(nn.Module):
         else:
             foot_reg = foot_height.pow(2).mean()
             total_loss += foot_reg * 1e-4
-
 
         if total_loss.isnan():
             pdb.set_trace()
