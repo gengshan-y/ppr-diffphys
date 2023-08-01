@@ -3,7 +3,7 @@ import pdb
 import torch
 import torch.nn as nn
 from urdfpy import URDF
-from nnutils.urdf_utils import get_joints, robot2parent_idx
+from ppr.urdf_utils import get_joints, robot2parent_idx
 
 class URDFRobot(nn.Module):
     def __init__(self, urdf_path):

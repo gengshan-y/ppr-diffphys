@@ -3,9 +3,9 @@ import time
 from absl import app
 from absl import flags
 
-from env_utils.warp_env import Scene
-from env_utils.vis import Logger
-from utils.dataloader import DataLoader
+from ppr.warp_env import Scene
+from ppr.vis import Logger
+from ppr.dataloader import DataLoader
 
 opts = flags.FLAGS
 # distributed data parallel

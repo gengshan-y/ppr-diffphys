@@ -1,11 +1,8 @@
-import os
 import numpy as np
 import json
 import sys
-import trimesh
 import pdb
-sys.path.insert(0, '%s/../../'%os.path.join(os.path.dirname(__file__)))
-from utils.io import vis_kps
+from ppr.io import vis_kps
 
 def parse_amp(amp_info):
   msm = {}
