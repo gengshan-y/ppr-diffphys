@@ -173,9 +173,6 @@ def compute_bone_from_joint(model, is_init, vid=None):
         scale = model.bones[:,7:10]
         center = model.bones[:,:3]
     bones =  torch.cat([center, orient, scale],-1)
-    #from utils.io import save_bones
-    #save_bones(bones.detach().cpu().numpy(), 0.1, 'tmp/0.obj')
-    #bones = model.nerf_body_rts.symmetrize_bones(urdf, bones)
     return bones
 
 def angle_to_rts(robot, joints, angles, sim3):

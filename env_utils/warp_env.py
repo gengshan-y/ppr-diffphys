@@ -341,14 +341,14 @@ class Scene(nn.Module):
         self.use_dr = use_dr
         
         # mlp
-        if opts.pre_skel=="a1":
+        if opts.urdf_template=="a1":
             urdf_path='data/urdf_templates/a1/urdf/a1.urdf'
             in_bullet=True
             kp=220.
             kd=2.
             shape_ke=1.e+4
             shape_kd=0
-        elif opts.pre_skel=="wolf":
+        elif opts.urdf_template=="wolf":
             urdf_path='data/urdf_templates/wolf.urdf'
             in_bullet=False
             self.joint_attach_ke = 32000.
@@ -357,7 +357,7 @@ class Scene(nn.Module):
             kd=2.
             shape_ke=1000
             shape_kd=100
-        elif opts.pre_skel=="wolf_mod":
+        elif opts.urdf_template=="wolf_mod":
             urdf_path='data/urdf_templates/wolf_mod.urdf'
             in_bullet=False
             self.joint_attach_ke = 8000.
@@ -370,21 +370,16 @@ class Scene(nn.Module):
             #self.joint_attach_kd = 100.
             #kp=220.
             #kd=2.
-        elif opts.pre_skel=="laikago":
+        elif opts.urdf_template=="laikago":
             urdf_path='data/urdf_templates/laikago/laikago.urdf'
             in_bullet=False
-            #urdf_path='utils/tds/data/laikago/laikago_mod.urdf'
-            #in_bullet=True
             self.joint_attach_ke = 16000.
             self.joint_attach_kd = 200.
             kp=220.
             kd=2.
             shape_ke=1.e+4
             shape_kd=0
-            if opts.rollout:
-                urdf_path='utils/tds/data/laikago/laikago_toes_zup_joint_order.urdf'
-                in_bullet=True
-        elif opts.pre_skel=="human":
+        elif opts.urdf_template=="human":
             urdf_path='data/urdf_templates/human.urdf'
             in_bullet=False
             self.joint_attach_ke = 64000.
@@ -393,7 +388,7 @@ class Scene(nn.Module):
             kd=2.
             shape_ke=1000
             shape_kd=100
-        elif opts.pre_skel=="human_mod":
+        elif opts.urdf_template=="human_mod":
             urdf_path='data/urdf_templates/human_mod.urdf'
             in_bullet=False
             self.joint_attach_ke = 8000.
@@ -404,7 +399,7 @@ class Scene(nn.Module):
             shape_kd=100
             #kp=20.
             #kd=2.
-        elif opts.pre_skel=="human_amp":
+        elif opts.urdf_template=="human_amp":
             urdf_path='data/urdf_templates/human_amp.urdf'
             in_bullet=False
             kp=20.
@@ -529,16 +524,6 @@ class Scene(nn.Module):
         # functions
         self.pred_est_q_rect = rectify_func(self.pred_est_q, rotate_frame, self.global_q)
         self.pred_est_q_rect_rod = rectify_func(self.pred_est_q, rotate_frame, self.global_q, to_quat=False)
-
-        # mpc
-        if opts.rollout:
-            os.sys.path.insert(0, 'utils/tds')
-            import laikago_tds_sim_clean as robot_sim
-            from utils.tds_env import _setup_hybrid_controller, _setup_controller, _setup_pd_controller
-            self.sim_robot = robot_sim.SimpleRobot(simulation_time_step=self.dt)
-            #self.controller = _setup_pd_controller(self.sim_robot)
-            self.controller = _setup_hybrid_controller(self.sim_robot)
-            #self.controller = _setup_controller(self.sim_robot)
 
         # other hypoter parameters
         self.th_multip = 0 # seems to cause problems
@@ -936,8 +921,6 @@ class Scene(nn.Module):
         # get a batch of ref pos/orn/joints
         if frame_start is None:
             # get a batch of clips
-            #frame_start = torch.rand(self.num_envs, device=self.device)
-            #frame_start = (frame_start + self.opts.local_rank/self.opts.ngpu).remainder(1)
             frame_start = torch.Tensor(np.random.rand(self.num_envs)).to(self.device)
             if self.use_dr:
                 #vid = np.random.randint(0,len(self.data_offset)-1)
@@ -1093,30 +1076,11 @@ class Scene(nn.Module):
         body_qs,body_qd = ForwardWarp.apply(q_init, qd_init, torques, res_fin, 
              ref, target_ke, target_kd, body_mass, self)
        
-        if self.opts.rollout:
-            ## compute state pos/vel: bs, T, K,7/6, full
-            state_q = state_q.reshape(self.wdw_length_full, self.num_envs, -1).permute(1,0,2)
-            state_qd=state_qd.reshape(self.wdw_length_full, self.num_envs, -1).permute(1,0,2)
-      
-            ## use raw data
-            #amp_info = self.amp_info_func(steps_fr.cpu().numpy())
-            #msm = parse_amp(amp_info)
-            #bullet2gl(msm,self.in_bullet)
-            #state_q[...,:3]  = torch.Tensor(msm['pos']).cuda()
-            #state_q[...,3:7] = torch.Tensor(msm['orn']).cuda()
-            #state_q[...,7:19]= torch.Tensor(msm['jang']).cuda()
-            #state_qd[...,:3]  = torch.Tensor(msm['vel']).cuda()
-            #state_qd[...,3:6] = torch.Tensor(msm['avel']).cuda()
-            #state_qd[...,6:18]= torch.Tensor(msm['jvel']).cuda()
-
-            #state_q[...,1] += 0.03 # no need to account for toe since it is covered by the leg (+0.0035?)
-            state_body_q, state_body_qd = fk_no_grad(state_q, state_qd, self)
-        else: 
-            ## compute state pos/vel: bs, T, K,7/6
-            state_q = state_q[self.frame2step].reshape(self.wdw_length+1, self.num_envs, -1)
-            state_qd=state_qd[self.frame2step].reshape(self.wdw_length+1, self.num_envs, -1)
-            state_body_q, state_body_qd, self.tstate = ForwardKinematics.apply(state_q, 
-                                                                 state_qd, self)
+        ## compute state pos/vel: bs, T, K,7/6
+        state_q = state_q[self.frame2step].reshape(self.wdw_length+1, self.num_envs, -1)
+        state_qd=state_qd[self.frame2step].reshape(self.wdw_length+1, self.num_envs, -1)
+        state_body_q, state_body_qd, self.tstate = ForwardKinematics.apply(state_q, 
+                                                                state_qd, self)
         
         # make sure the feet is above the ground
         if self.use_dr:
@@ -1131,47 +1095,6 @@ class Scene(nn.Module):
         #target_body_q[...,1] += foot_offset # bs, 7
         #target_q[...,1] += foot_offset
         #self.global_q.data[1] += foot_offset
-
-        if self.opts.rollout:
-            # try mpc
-            # plot foot
-            foot_idx = [4, 8, 12, 16] #fr, fl, rr, rl
-            foot_pos = state_body_q[...,foot_idx,:3]
-            trimesh.Trimesh(mesh_pts[0,0].view(-1,3).cpu().detach(), faces_single).export('tmp/0.obj')
-            vis_kps(foot_pos.view(-1,4,3).permute(0,2,1).cpu().detach(), 'tmp/1.obj')
-            floor_scale = foot_pos.abs().max().cpu()*2
-            floor_tsfm = np.eye(4)
-            floor_tsfm[1,3] = 0.03
-            ground_plane = trimesh.primitives.Box(
-                    extents=[floor_scale, 0, floor_scale], transform=floor_tsfm)
-            ground_plane.export('tmp/2.obj')
-
-            self.controller.reset()
-            msm = state_to_msm(state_q[0,0], state_qd[0,0], foot_pos[0,0], self.in_bullet)
-            self.sim_robot.ResetPose(pos=msm['pos'], orn=msm['orn'])
-            self.controller.update_controller_params(msm)
-            self.sim_robot.ResetPose(pos=msm['pos'], orn=msm['orn'], jang=msm['jang'],
-                                     vel=msm['vel'], avel=msm['avel'])
-            self.msm = []
-            self.obs = []
-            for s in range(self.wdw_length_full):
-                if s%100 == 0:
-                    pdb.set_trace()
-                #msm = state_to_msm(state_q[0,0], state_qd[0,0], foot_pos[0,0], self.in_bullet)
-                msm = state_to_msm(state_q[s,0], state_qd[s,0], foot_pos[0,s], self.in_bullet)
-                
-                #self.sim_robot.SetPose(pos=msm['pos'], orn=msm['orn']) # in order to track correctly
-                self.controller.update_controller_params(copy.deepcopy(msm))
-                hybrid_action = self.controller.get_action()
-                self.sim_robot.Step(hybrid_action)
-                
-                #self.sim_robot.ResetPose(pos=msm['pos'], orn=msm['orn'], jang=msm['jang'])
-                # get states
-                if s%self.skip_factor==0:
-                    obs = self.sim_robot.GetTrueObservation()
-                    self.obs.append( obs )
-                    self.msm.append( msm )
-            return {}
 
         total_loss = 0
         # root loss
@@ -1338,14 +1261,11 @@ class Scene(nn.Module):
             com = compute_com(obs, part_com, part_mass)
             com_k.append( compute_com(msm, part_com, part_mass) )
             #x_msm = can2gym2gl(x_rest, msm, in_bullet=in_bullet, use_urdf=use_urdf, use_angle=True)
-            if self.opts.rollout:
-                articulate_func = bullet_can2gym2gl
-            else:
-                articulate_func = can2gym2gl
-            x_msm = articulate_func(x_rest, msm, in_bullet=self.in_bullet, use_urdf=use_urdf)
-            x_tst = articulate_func(x_rest, tst, in_bullet=self.in_bullet, use_urdf=use_urdf)
-            x_sim = articulate_func(x_rest, obs, gforce=grf,com=com, in_bullet=self.in_bullet, use_urdf=use_urdf)
-            #x_sim = articulate_func(x_rest, obs, gforce=grf+jaf, in_bullet=self.in_bullet, use_urdf=use_urdf)
+
+            x_msm = can2gym2gl(x_rest, msm, in_bullet=self.in_bullet, use_urdf=use_urdf)
+            x_tst = can2gym2gl(x_rest, tst, in_bullet=self.in_bullet, use_urdf=use_urdf)
+            x_sim = can2gym2gl(x_rest, obs, gforce=grf,com=com, in_bullet=self.in_bullet, use_urdf=use_urdf)
+            #x_sim = can2gym2gl(x_rest, obs, gforce=grf+jaf, in_bullet=self.in_bullet, use_urdf=use_urdf)
 
             x_sims.append(x_sim)
             x_msms.append(x_msm)

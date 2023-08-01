@@ -1,5 +1,3 @@
-# Copyright (c) Facebook, Inc. and its affiliates. All rights reserved.
-
 import numpy as np
 def label_colormap():
   """   
