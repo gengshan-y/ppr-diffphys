@@ -1,35 +1,29 @@
-import os
-import sys
+import os, sys
 import copy
 import time
 import torch
 import torch.nn as nn
 from torch.nn.utils import clip_grad_norm_
-import torch.nn.functional as F
 from pytorch3d import transforms
 import pdb
-import glob
 import numpy as np
 import scipy.interpolate
 from scipy.spatial.transform import Rotation as R
 import trimesh
 
 from utils.io import vis_kps
-from env_utils.torch_utils import Embedding, NeRF, clip_grad
-from nnutils.nerf import SkelHead, FrameCode, RTExpMLP
+from utils.dataloader import parse_amp
+from env_utils.torch_utils import NeRF
 from nnutils.robot import URDFRobot
 from nnutils.urdf_utils import articulate_robot_rbrt, articulate_robot_rbrt_batch,\
                                articulate_robot
 from nnutils.geom_utils import se3_vec2mat, se3_mat2vec, rot_angle, vec_to_sim3, \
                                 create_base_se3, refine_rt, fid_reindex
-from env_utils.dataloader import parse_amp
 from env_utils.import_urdf import parse_urdf
 from env_utils.articulation import eval_fk
 from env_utils.integrator_euler import SemiImplicitIntegrator
 
-import cv2
 import warp as wp
-import warp.sim
 wp.init()
 
 def zero_grad_list(paramlist):
@@ -348,14 +342,14 @@ class Scene(nn.Module):
         
         # mlp
         if opts.pre_skel=="a1":
-            urdf_path='mesh_material/a1/urdf/a1.urdf'
+            urdf_path='data/urdf_templates/a1/urdf/a1.urdf'
             in_bullet=True
             kp=220.
             kd=2.
             shape_ke=1.e+4
             shape_kd=0
         elif opts.pre_skel=="wolf":
-            urdf_path='mesh_material/wolf.urdf'
+            urdf_path='data/urdf_templates/wolf.urdf'
             in_bullet=False
             self.joint_attach_ke = 32000.
             self.joint_attach_kd = 100.
@@ -364,7 +358,7 @@ class Scene(nn.Module):
             shape_ke=1000
             shape_kd=100
         elif opts.pre_skel=="wolf_mod":
-            urdf_path='mesh_material/wolf_mod.urdf'
+            urdf_path='data/urdf_templates/wolf_mod.urdf'
             in_bullet=False
             self.joint_attach_ke = 8000.
             self.joint_attach_kd = 200.
@@ -377,7 +371,7 @@ class Scene(nn.Module):
             #kp=220.
             #kd=2.
         elif opts.pre_skel=="laikago":
-            urdf_path='mesh_material/laikago/laikago.urdf'
+            urdf_path='data/urdf_templates/laikago/laikago.urdf'
             in_bullet=False
             #urdf_path='utils/tds/data/laikago/laikago_mod.urdf'
             #in_bullet=True
@@ -391,7 +385,7 @@ class Scene(nn.Module):
                 urdf_path='utils/tds/data/laikago/laikago_toes_zup_joint_order.urdf'
                 in_bullet=True
         elif opts.pre_skel=="human":
-            urdf_path='mesh_material/human.urdf'
+            urdf_path='data/urdf_templates/human.urdf'
             in_bullet=False
             self.joint_attach_ke = 64000.
             self.joint_attach_kd = 150. # tune this such that it would not blow up
@@ -400,7 +394,7 @@ class Scene(nn.Module):
             shape_ke=1000
             shape_kd=100
         elif opts.pre_skel=="human_mod":
-            urdf_path='mesh_material/human_mod.urdf'
+            urdf_path='data/urdf_templates/human_mod.urdf'
             in_bullet=False
             self.joint_attach_ke = 8000.
             self.joint_attach_kd = 200.
@@ -411,7 +405,7 @@ class Scene(nn.Module):
             #kp=20.
             #kd=2.
         elif opts.pre_skel=="human_amp":
-            urdf_path='mesh_material/human_amp.urdf'
+            urdf_path='data/urdf_templates/human_amp.urdf'
             in_bullet=False
             kp=20.
             kd=2.
@@ -419,28 +413,6 @@ class Scene(nn.Module):
             shape_kd=100
         self.in_bullet=in_bullet
         self.robot = URDFRobot(urdf_path=urdf_path)
-
-        ## pose code
-        #self.pose_code = FrameCode(num_freq = opts.num_freq, 
-        #                           embedding_dim = opts.t_embed_dim, 
-        #                           vid_offset = self.data_offset)
-        #self.rest_pose_code = nn.Embedding(1, opts.t_embed_dim)
-        #self.nerf_root_rts = RTExpMLP(self.gt_steps,
-        #                     opts.num_freq,opts.t_embed_dim, self.data_offset,
-        #                     delta=False)
-        #self.nerf_body_rts = SkelHead(urdf=self.robot.urdf,joints=self.robot.joints,
-        #      sim3=self.robot.sim3, rest_angles=self.robot.rest_angles,
-        #                pose_code=self.pose_code,
-        #                rest_pose_code=self.rest_pose_code,
-        #                data_offset=self.data_offset,
-        #                in_channels=opts.t_embed_dim,
-        #                out_channels=self.robot.num_dofs)
-
-        ## load weights
-        #states = torch.load('tmp/laikago.pth', map_location='cpu')
-        #body_states = self.rm_module_prefix(states,
-        #    prefix='module.nerf_body_rts')
-        #self.nerf_body_rts.load_state_dict(body_states, strict=True)
 
         # env
         self.articulation_builder = wp.sim.ModelBuilder()
