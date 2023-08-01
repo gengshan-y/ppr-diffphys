@@ -206,90 +206,57 @@ def pred_est_q(steps_fr, nerf_root_rts, nerf_body_rts, bg_rts):
     from lab4d.utils.quat_transform import quaternion_translation_to_se3
 
     quat_trans = nerf_root_rts.get_vals(steps_fr.reshape(-1).long())
-    pred_mat = quaternion_translation_to_se3(quat_trans)
+    pred_mat = quaternion_translation_to_se3(quat_trans[0], quat_trans[1])
 
     ##TODO further rotate along x axis
     # rot_offset = cv2.Rodrigues(np.asarray([0.2,0.,0.]))[0]
     # rot_offset = torch.Tensor(rot_offset).to(device)[None]
     # pred_mat[:,:3,:3] = rot_offset @ pred_mat[:,:3,:3]
 
-    # sim3 robot transform
-    sim3 = nerf_body_rts.compute_sim3(vidid[:, 0])
-
-    # TODO do not update sim3 and root rts
-    # sim3 = sim3.detach()
-    # pred_mat = pred_mat.detach()
-
-    center, orient, scale = vec_to_sim3(sim3)
-    se3 = torch.cat([orient, center[..., None]], 2)
-    zero_ones = torch.zeros_like(se3[:, :1])
-    zero_ones[..., -1] = 1
-    se3 = torch.cat([se3, zero_ones], 1)
-
-    zero_ones = torch.zeros_like(pred_mat[:, :1])
-    zero_ones[..., -1] = 1
-    pred_mat = torch.cat([pred_mat, zero_ones], 1)  # -1,4,4
-    pred_mat = pred_mat.view(bs, n_fr, 4, 4) @ se3[:, None]
-    pred_mat = pred_mat.view(-1, 4, 4)
-
     # intermediate outputs
     obj2view = pred_mat.clone().view(bs, n_fr, 4, 4)
-    obj2view[..., :3, 3] /= scale.mean(-1).view(bs, 1, 1)  # TODO use ave scale
 
     # background transform
-    bgrt = bg_rts.get_rts(steps_fr.reshape(-1))  # -1,3,4
-    bgrt = torch.cat([bgrt, zero_ones], 1)  # -1,4,4
+    zero_ones = torch.zeros_like(pred_mat[:, :1])
+    zero_ones[..., -1] = 1
+    quat_trans = bg_rts.get_vals(steps_fr.reshape(-1).long())  # -1,3,4
+    bgrt = quaternion_translation_to_se3(quat_trans[0], quat_trans[1])
+
     pred_mat = bgrt.inverse() @ pred_mat
-    bg2world = se3_vec2mat(bg_rts.bg2world[vidid.view(-1)])
-    bg2world[..., :3, 3] *= bg_rts.bg2fg_scale[vidid.view(-1)][..., None].exp()
-    pred_mat = bg2world @ pred_mat
+    # bg2world = se3_vec2mat(bg_rts.bg2world[vidid.view(-1)])
+    # bg2world[..., :3, 3] *= bg_rts.bg2fg_scale[vidid.view(-1)][..., None].exp()
+    # pred_mat = bg2world @ pred_mat
 
     # cv to gl coords
     cv2gl = torch.eye(4).to(pred_mat.device)
     cv2gl[1, 1] = -1
     cv2gl[2, 2] = -1
     pred_mat = cv2gl[None] @ pred_mat
-    pred_mat[..., :3, 3] /= (
-        scale.mean(-1)[:, None].repeat(1, n_fr).view(-1, 1)
-    )  # TODO use ave scale
 
     pred_q = se3_mat2vec(pred_mat)  # xyzw
     pred_q = pred_q.view(bs, n_fr, -1)
     return pred_q, obj2view
 
 
-def pred_est_ja(steps_fr, nerf_body_rts, env):
+def pred_est_ja(steps_fr, nerf_body_rts, env, robot):
     """
     bs,T
     """
     bs, n_fr = steps_fr.shape
-    device = steps_fr.device
     data_offset = nerf_body_rts.time_embedding.frame_offset
     vidid, _ = fid_reindex(steps_fr, len(data_offset) - 1, data_offset)
     vidid = vidid.long()
 
     # pred joint angles
-    _, pred_joints = nerf_body_rts.forward_abs(steps_fr.reshape(-1, 1))
+    pred_joints = nerf_body_rts.get_vals(steps_fr.reshape(-1).long(), return_so3=True)
     pred_joints = pred_joints.view(bs, n_fr, -1)
 
     # update joint locations
-    # TODO rightnow, assume no extra scaling in the simulation space
-    joint_origin = np.stack([i.origin for i in nerf_body_rts.urdf.joints], 0)
-    joint_origin = torch.Tensor(joint_origin).to(device)[None].repeat(bs, 1, 1, 1)
-    jlen_scale = nerf_body_rts.compute_jlen_scale(vidid[:, 0])
-    joint_tmat = nerf_body_rts.update_joints(
-        nerf_body_rts.urdf, nerf_body_rts.joints, jlen_scale
-    )
-    map_idx = np.asarray(nerf_body_rts.urdf.unique_body_idx[1:]) - 3
-    joint_origin[:, map_idx, :3, 3] = joint_tmat
-    joint_origin = joint_origin[:, map_idx]  # TODO get only the unique ones
+    joint_origin = nerf_body_rts.rest_joints[None].repeat(bs, 1, 1)
+    zero_ones = torch.zeros((bs, nerf_body_rts.num_se3, 4), device=joint_origin.device)
+    zero_ones[..., -1] = 1  # xyzw
+    joint_origin = torch.cat([joint_origin, zero_ones], -1)
 
-    # move to warp skeleton
-    joint_quat = dqtorch.matrix_to_quaternion(
-        joint_origin[..., :3, :3]
-    )  # for a single video
-    joint_tmat = joint_origin[..., :3, 3]
-    joint_origin = torch.cat([joint_tmat, joint_quat[..., [1, 2, 3, 0]]], -1)
     # set first joitn to identity
     zero_ones = torch.zeros_like(joint_origin[:, :1])
     zero_ones[:, 0, -1] = 1
@@ -329,7 +296,7 @@ class WarpBodyMLP(nn.Module):
         self.mlp = copy.deepcopy(banmo_mlp)
 
     def forward(self, x):
-        _, out = self.mlp.forward_abs(x)
+        out = self.mlp.get_vals(x.long(), return_so3=True)
         return out
 
     def override_states(self, banmo_mlp):
@@ -345,6 +312,10 @@ class phys_model(nn.Module):
         self.opts = opts
         logname = "%s-%s" % (opts["seqname"], opts["logname"])
         self.save_dir = os.path.join(opts["logroot"], logname)
+
+        self.total_iters = (
+            opts["num_rounds"] * opts["iters_per_round"] * opts["ratio_phys_cycle"]
+        )
 
         self.dt = dt
         self.device = device
@@ -590,7 +561,7 @@ class phys_model(nn.Module):
         return out, obj2view
 
     def pred_est_ja(self, steps_fr):
-        out = pred_est_ja(steps_fr, self.nerf_body_rts, self.env)
+        out = pred_est_ja(steps_fr, self.nerf_body_rts, self.env, self.robot)
         return out
 
     def warmup_state_estimate(self):
@@ -617,6 +588,9 @@ class phys_model(nn.Module):
             grad_list = self.update()
             if it % 100 == 0:
                 print("step: %s/loss: %.4f" % (it, total_loss))
+
+    def set_progress(self, num_iters):
+        self.progress = num_iters / self.total_iters
 
     @staticmethod
     def rm_module_prefix(states, prefix="module"):
@@ -796,9 +770,7 @@ class phys_model(nn.Module):
         self.scheduler = torch.optim.lr_scheduler.OneCycleLR(
             self.optimizer,
             list(lr_dict.values()),
-            int(
-                opts["num_rounds"] * opts["iters_per_round"] * opts["ratio_phys_cycle"]
-            ),
+            int(self.total_iters),
             pct_start=0.02,  # use 2%
             cycle_momentum=False,
             anneal_strategy="linear",
@@ -822,6 +794,7 @@ class phys_model(nn.Module):
         return grad_dict
 
     def sample_sys_state(self, steps_fr):
+        bs, n_fr = steps_fr.shape
         batch = {}
         batch["target_q"], batch["obj2view"] = self.pred_est_q(steps_fr)
         batch["target_ja"] = self.pred_est_ja(steps_fr)
@@ -830,10 +803,9 @@ class phys_model(nn.Module):
         # batch['target_jad']= self.compute_gradient(self.pred_est_ja, steps_fr.clone()) / self.samp_int
         batch["target_qd"] = torch.zeros_like(batch["target_q"])[..., :6]
         batch["target_jad"] = torch.zeros_like(batch["target_ja"])
-        # ks
-        vidid, _ = fid_reindex(steps_fr, len(self.data_offset) - 1, self.data_offset)
-        batch["ks"] = self.ks_params[vidid.long()]
-
+        batch["ks"] = self.ks_params.get_vals(steps_fr.reshape(-1).long()).reshape(
+            bs, n_fr, -1
+        )
         return batch
 
     @staticmethod
@@ -1008,8 +980,6 @@ class phys_model(nn.Module):
                 rand_list = np.asarray(range(frame_start.shape[0]))
                 np.random.shuffle(rand_list)
                 frame_start = frame_start[rand_list[: self.num_envs]]
-
-                # frame_start = (frame_start * (self.gt_steps_visible-self.wdw_length)).round().long()
             else:
                 frame_start = (
                     (frame_start * (self.gt_steps_visible - self.wdw_length))
@@ -1039,24 +1009,6 @@ class phys_model(nn.Module):
                 self.target_q_vis = target_q[:, self.frame2step].clone()
                 self.obj2view_vis = batch["obj2view"][:, self.frame2step].clone()
                 self.ks_vis = batch["ks"][:, self.frame2step].clone()
-                # cache some values
-                cache_steps_fr = (
-                    torch.linspace(
-                        0, self.gt_steps, self.gt_steps + 1, device=self.device
-                    )
-                    .long()
-                    .view(1, -1)
-                )
-                # batch = self.sample_sys_state(cache_steps_fr)
-                # self.cache_q, self.cache_ja = batch['target_q'], batch['target_ja']
-                # cache_delta_ja = self.delta_joint_est_mlp(cache_steps_fr.reshape(1,-1,1))
-                # cache_delta_root = self.delta_root_mlp(cache_steps_fr.reshape(1,-1,1))
-                # self.cache_ja += cache_delta_ja
-                # self.cache_q = rotate_frame(self.global_q, self.cache_q)
-                # self.cache_q = self.compose_delta(self.cache_q, cache_delta_root) # delta x target
-                # pdb.set_trace()
-                # self.cache_ja = self.delta_joint_est_mlp(cache_steps_fr.reshape(-1,1))
-                # self.cache_q = self.delta_root_mlp(cache_steps_fr.reshape(-1,1)).view(1,-1,7)
         else:
             # get mocap data
             target_q, target_ja, target_qd, target_jad = self.get_batch_input(
@@ -1257,7 +1209,7 @@ class phys_model(nn.Module):
             # total_loss = total_loss*0 + foot_reg*1e-2
             # print(foot_height.max())
             # print(self.global_q)
-            if self.total_steps < 400:
+            if self.progress < 0.4:
                 foot_reg = foot_reg.topk(foot_reg.shape[0] * 4 // 5, largest=False)[
                     0
                 ].mean()
