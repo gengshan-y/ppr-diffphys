@@ -1,7 +1,10 @@
 # vidyn
 
 ## Install
+`pip install urdfpy==0.0.22; pip install networkx==2.5`
 `pip install git+https://github.com/MightyChaos/dqtorch`
+`pip install vedo==2022.2.3`
+`pip install warp==0.3.1`
 
 (0) use larger skeleton to avoid blowing up
 (1) new urdf parser to deal with sperical joints => no reduncant links => 2x time steps

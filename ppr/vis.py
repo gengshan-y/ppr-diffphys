@@ -3,7 +3,6 @@ os.environ["PYOPENGL_PLATFORM"] = "egl" #opengl seems to only work with TPU
 import pyrender
 
 import pdb
-import cv2
 import trimesh
 import numpy as np
 import vedo
@@ -17,8 +16,7 @@ class Logger:
     def __init__(self, opts):
         # vedo vis
         super(Logger, self).__init__()
-        dis=10
-        #dis=3
+        dis=5
         self.camera = {'pos':[dis,dis/2,dis],
                   'focalPoint': [0.5,0.5,0.5],
                   'viewup': [0,1,0]}
