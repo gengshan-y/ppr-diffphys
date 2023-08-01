@@ -1,0 +1,9 @@
+configs
+misc
+raw
+logdir
+tmp
+database
+__pycache__/
+*.pyc
+.nfs*
