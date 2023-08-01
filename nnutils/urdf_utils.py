@@ -109,6 +109,28 @@ def angles2cfg(robot, angles):
         cfg[name] = angles[idx].cpu().numpy()
     return cfg
 
+def get_visual_origin(urdf):
+    lfk = urdf.link_fk()
+
+    rt = {}
+    for link in lfk:
+        for visual in link.visuals:
+            if len(visual.geometry.meshes)>0:
+                for mesh in visual.geometry.meshes:
+                    rt[mesh] = visual.origin
+    return rt
+
+def get_collision_origin(urdf):
+    lfk = urdf.link_fk()
+
+    rt = {}
+    for link in lfk:
+        for visual in link.collisions:
+            if len(visual.geometry.meshes)>0:
+                for mesh in visual.geometry.meshes:
+                    rt[mesh] = visual.origin
+    return rt
+
 def articulate_robot_rbrt_batch(robot, rbrt):
     """
     Note: this assumes rbrt is a torch tensor
