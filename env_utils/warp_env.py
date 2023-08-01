@@ -4,21 +4,19 @@ import time
 import torch
 import torch.nn as nn
 from torch.nn.utils import clip_grad_norm_
-from pytorch3d import transforms
 import pdb
 import numpy as np
 import scipy.interpolate
 from scipy.spatial.transform import Rotation as R
-import trimesh
+import dqtorch
 
-from utils.io import vis_kps
 from utils.dataloader import parse_amp
 from env_utils.torch_utils import NeRF
 from nnutils.robot import URDFRobot
 from nnutils.urdf_utils import articulate_robot_rbrt, articulate_robot_rbrt_batch,\
                                articulate_robot
 from nnutils.geom_utils import se3_vec2mat, se3_mat2vec, rot_angle, vec_to_sim3, \
-                                create_base_se3, refine_rt, fid_reindex
+                                create_base_se3, refine_rt, fid_reindex, axis_angle_to_matrix, quaternion_invert
 from env_utils.import_urdf import parse_urdf
 from env_utils.articulation import eval_fk
 from env_utils.integrator_euler import SemiImplicitIntegrator
@@ -104,27 +102,6 @@ def clip_loss(loss_seq, th):
         loss_seq = loss_seq.mean()
     return loss_seq
 
-def rectify_func(pred_est_q, rotate_frame, global_q, to_quat=True):
-    def rectify_func_rt(steps_fr):
-        pred_q = pred_est_q(steps_fr)
-        pred_q = rotate_frame(global_q, pred_q)
-        if not to_quat:
-            rot = transforms.quaternion_to_axis_angle(pred_q[...,3:])
-            pred_q = torch.cat( [pred_q[...,:3], rot], -1)
-        return pred_q
-    return rectify_func_rt
-
-def compose_func(delta_root_mlp, compose_delta, target_q):
-    def compose_func_rt(steps_fr):
-        bs,nstep = steps_fr.shape
-        delta_root = delta_root_mlp(steps_fr.reshape(-1,1))
-        delta_root = delta_root.view(bs,nstep,-1)
-        est_q = compose_delta(target_q, delta_root)
-        est_q = transforms.quaternion_to_axis_angle(est_q)
-        return est_q
-    
-    return compose_func_rt
-        
 def se3_loss(pred, gt,rot_ratio=0.1):
     """
     ...,7
@@ -137,13 +114,13 @@ def se3_loss(pred, gt,rot_ratio=0.1):
     rot_pred = pred[...,3:]
     rot_gt = gt[...,3:]
     if rot_pred.shape[-1]==3:
-        rot_pred = transforms.axis_angle_to_matrix(rot_pred)
-        rot_gt = transforms.axis_angle_to_matrix(rot_gt) 
+        rot_pred = axis_angle_to_matrix(rot_pred)
+        rot_gt = axis_angle_to_matrix(rot_gt) 
         rot_gti = rot_gt.inverse()
     elif rot_pred.shape[-1]==4:
-        rot_pred = transforms.quaternion_to_matrix(rot_pred[...,[3,0,1,2]]) # xyzw => wxyz
-        rot_gti = transforms.quaternion_invert(rot_gt[...,[3,0,1,2]])
-        rot_gti = transforms.quaternion_to_matrix(rot_gti) 
+        rot_pred = dqtorch.quaternion_to_matrix(rot_pred[...,[3,0,1,2]]) # xyzw => wxyz
+        rot_gti = quaternion_invert(rot_gt[...,[3,0,1,2]])
+        rot_gti = dqtorch.quaternion_to_matrix(rot_gti) 
     rot_loss = rot_angle(rot_pred @ rot_gti)
 
     #loss = trn_loss
@@ -276,7 +253,7 @@ def pred_est_ja(steps_fr, nerf_body_rts, env):
     joint_origin = joint_origin[:,map_idx] #TODO get only the unique ones
 
     # move to warp skeleton
-    joint_quat = transforms.matrix_to_quaternion(joint_origin[...,:3,:3]) # for a single video
+    joint_quat = dqtorch.matrix_to_quaternion(joint_origin[...,:3,:3]) # for a single video
     joint_tmat = joint_origin[...,:3,3]
     joint_origin = torch.cat([joint_tmat, joint_quat[...,[1,2,3,0]]],-1)
     # set first joitn to identity
@@ -520,10 +497,6 @@ class Scene(nn.Module):
         # optimizer
         self.add_optimizer(opts)
         self.total_loss_hist = []
-        
-        # functions
-        self.pred_est_q_rect = rectify_func(self.pred_est_q, rotate_frame, self.global_q)
-        self.pred_est_q_rect_rod = rectify_func(self.pred_est_q, rotate_frame, self.global_q, to_quat=False)
 
         # other hypoter parameters
         self.th_multip = 0 # seems to cause problems
@@ -1025,26 +998,9 @@ class Scene(nn.Module):
             est_q = self.compose_delta(target_q, delta_q) # delta x target
             est_ja = target_ja + delta_ja_est
             ref_ja = target_ja + delta_ja_ref
-
-            #pred_est_q_comp = compose_func(self.delta_root_mlp, self.compose_delta, target_q)
-            #delta_rqd = self.compute_gradient(pred_est_q_comp, steps_fr.clone()) # grad wrt index
-            ## need to add another rotation term to account delta root 
-            #est_rqd = rotate_frame_vel(delta_q, target_qd)
-            #est_rqd = est_rqd + delta_rqd / self.samp_int 
-            #delta_jad = self.compute_gradient(self.delta_joint_est_mlp, steps_fr.reshape(-1,1).clone())
-            #delta_jad = delta_jad.reshape(self.num_envs,-1,self.n_actuators)
-            #est_jad = target_jad + delta_jad / self.samp_int
-            #est_qd = torch.cat([ est_rqd, est_jad ], -1) + delta_qd
             est_qd = delta_qd
 
         ref = torch.cat([torch.zeros_like(ref_ja[...,:1].repeat(1,1,6)), ref_ja],-1)
-        # compute predicted init qd: d(pred_q)/dt
-        #pred_joint_qd = self.compute_gradient(self.pred_est_ja, steps_fr[:,:1]) / self.samp_int
-        #pred_qd =       self.compute_gradient(self.pred_est_q_rect_rod, steps_fr[:,:1]) / self.samp_int
-        #vel_pred = dvel_pred + torch.cat([ target_qd, target_jad ], -1) 
-        #vel_pred = torch.cat([ vel_pred[...,:6], target_jad ], -1) 
-        #vel_pred = torch.cat([ vel_pred[...,:6], pred_joint_qd ], -1) 
-        #vel_pred = torch.cat([ pred_qd, pred_joint_qd ], -1)
 
         ref, state_q, state_qd, torques, res_f = self.rearrange_pred(
                 est_q, est_ja, ref, est_qd, torques, res_f)

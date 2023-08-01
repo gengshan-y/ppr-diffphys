@@ -1,8 +1,8 @@
 import numpy as np
-from pytorch3d import transforms
 import torch
 import torch.nn.functional as F
 from scipy.spatial.transform import Rotation as R
+import dqtorch
 
 def se3exp_to_vec(se3exp):
     """
@@ -14,7 +14,7 @@ def se3exp_to_vec(se3exp):
 
     center = se3exp[:,:3,3]
     orient =  se3exp[:,:3,:3]
-    orient = transforms.matrix_to_quaternion(orient)
+    orient = dqtorch.matrix_to_quaternion(orient)
     scale = torch.zeros(num_bones,3).to(device)
     vec = torch.cat([center, orient, scale],-1)
     return vec
@@ -29,7 +29,7 @@ def vec_to_sim3(vec):
     center = vec[...,:3]
     orient = vec[...,3:7] # real first
     orient = F.normalize(orient, 2,-1)
-    orient = transforms.quaternion_to_matrix(orient) # real first
+    orient = dqtorch.quaternion_to_matrix(orient) # real first
     scale =  vec[...,7:].exp()
     return center, orient, scale
 
@@ -94,6 +94,59 @@ def refine_rt(rt_raw, root_rts):
     rt_raw[:,:3,3] = tmat
     return rt_raw
 
+def axis_angle_to_matrix(vec):
+    quat = dqtorch.axis_angle_to_quaternion(vec)
+    mat = dqtorch.quaternion_to_matrix(quat)
+    return mat
+
+def quaternion_to_axis_angle(quaternions: torch.Tensor) -> torch.Tensor:
+    """
+    taken from pytorch3d
+    Convert rotations given as quaternions to axis/angle.
+
+    Args:
+        quaternions: quaternions with real part first,
+            as tensor of shape (..., 4).
+
+    Returns:
+        Rotations given as a vector in axis angle form, as a tensor
+            of shape (..., 3), where the magnitude is the angle
+            turned anticlockwise in radians around the vector's
+            direction.
+    """
+    norms = torch.norm(quaternions[..., 1:], p=2, dim=-1, keepdim=True)
+    half_angles = torch.atan2(norms, quaternions[..., :1])
+    angles = 2 * half_angles
+    eps = 1e-6
+    small_angles = angles.abs() < eps
+    sin_half_angles_over_angles = torch.empty_like(angles)
+    sin_half_angles_over_angles[~small_angles] = (
+        torch.sin(half_angles[~small_angles]) / angles[~small_angles]
+    )
+    # for x small, sin(x/2) is about x/2 - (x/2)^3/6
+    # so sin(x/2)/x is about 1/2 - (x*x)/48
+    sin_half_angles_over_angles[small_angles] = (
+        0.5 - (angles[small_angles] * angles[small_angles]) / 48
+    )
+    return quaternions[..., 1:] / sin_half_angles_over_angles
+
+def quaternion_invert(quaternion: torch.Tensor) -> torch.Tensor:
+    """
+    taken from pytorch3d
+    Given a quaternion representing rotation, get the quaternion representing
+    its inverse.
+
+    Args:
+        quaternion: Quaternions as tensor of shape (..., 4), with real part
+            first, which must be versors (unit quaternions).
+
+    Returns:
+        The inverse, a tensor of quaternions of shape (..., 4).
+    """
+
+    scaling = torch.tensor([1, -1, -1, -1], device=quaternion.device)
+    return quaternion * scaling
+
 def se3_vec2mat(vec):
     """
     torch/numpy function
@@ -105,10 +158,10 @@ def se3_vec2mat(vec):
     if torch.is_tensor(vec):
         mat = torch.zeros(shape+(4,4)).to(vec.device)
         if vec.shape[-1] == 6:
-            rmat = transforms.axis_angle_to_matrix(vec[...,3:6])
+            rmat = axis_angle_to_matrix(vec[...,3:6])
         else:
             vec = vec[...,[0,1,2,6,3,4,5]] # xyzw => wxyz
-            rmat = transforms.quaternion_to_matrix(vec[...,3:7]) 
+            rmat = dqtorch.quaternion_to_matrix(vec[...,3:7]) 
         tmat = vec[...,:3]
     else:
         mat = np.zeros(shape+(4,4))
@@ -144,11 +197,11 @@ def se3_mat2vec(mat, outdim=7):
     shape = mat.shape[:-2]
     assert( torch.is_tensor(mat) )
     tmat = mat[...,:3,3]
-    quat = transforms.matrix_to_quaternion(mat[...,:3,:3]) 
+    quat = dqtorch.matrix_to_quaternion(mat[...,:3,:3]) 
     if outdim==7:
         rot = quat[...,[1,2,3,0]] # xyzw <= wxyz
     elif outdim==6:
-        rot = transforms.quaternion_to_axis_angle(quat)
+        rot = quaternion_to_axis_angle(quat)
     else: print('error'); exit()
     vec = torch.cat([tmat, rot], -1)
     return vec

@@ -2,10 +2,8 @@ import numpy as np
 import pdb
 import torch
 import torch.nn as nn
-from pytorch3d import transforms
-import trimesh
 from urdfpy import URDF
-from nnutils.urdf_utils import get_joints, robot2parent_idx, compute_bone_from_joint
+from nnutils.urdf_utils import get_joints, robot2parent_idx
 
 class URDFRobot(nn.Module):
     def __init__(self, urdf_path):

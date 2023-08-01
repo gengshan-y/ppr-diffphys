@@ -1,7 +1,5 @@
 import pdb
 import time
-import vedo
-vedo.settings.allowInteraction = True
 from absl import app
 from absl import flags
 
@@ -46,7 +44,7 @@ def main(_):
             model.reinit_envs(1, wdw_length=model.gt_steps,is_eval=True)
             model.forward()
             data = model.query()
-            vis.show(it, data) # vedo
+            vis.show(it, data)
 
             # training
             #model.reinit_envs(100, wdw_length=1,is_eval=False)
