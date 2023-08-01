@@ -4,7 +4,7 @@ import numpy as np
 import imageio
 import trimesh
 
-from ppr.colors import label_colormap
+from diffphys.colors import label_colormap
 
 def vis_kps(kps, path, binary_labels=None):
     """

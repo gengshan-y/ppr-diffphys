@@ -10,7 +10,7 @@ from torch.utils.tensorboard import SummaryWriter
 
 import sys
 sys.path.insert(0, '%s/../../'%os.path.join(os.path.dirname(__file__)))
-from ppr.io import save_vid
+from diffphys.io import save_vid
 
 class Logger:
     def __init__(self, opts):

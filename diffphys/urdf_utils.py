@@ -4,7 +4,7 @@ import cv2
 import numpy as np
 import trimesh
 import torch
-from ppr.geom_utils import vec_to_sim3, se3exp_to_vec, se3_vec2mat, se3_mat2rt,\
+from diffphys.geom_utils import vec_to_sim3, se3exp_to_vec, se3_vec2mat, se3_mat2rt,\
                                 fid_reindex
 from scipy.spatial.transform import Rotation as R
 
@@ -63,7 +63,7 @@ def get_joints(urdf,device="cpu"):
     joints: physical joints, B
     name2joints_idx, name to joint idx
     angle_names, registered angle predictions
-    only called in ppr/robot.py
+    only called in diffphys/robot.py
     """
     ball_joint=urdf.ball_joint
     counter = 0

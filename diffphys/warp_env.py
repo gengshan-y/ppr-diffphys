@@ -10,18 +10,18 @@ import scipy.interpolate
 from scipy.spatial.transform import Rotation as R
 import dqtorch
 
-from ppr.dataloader import parse_amp
-from ppr.torch_utils import NeRF
-from ppr.robot import URDFRobot
-from ppr.urdf_utils import articulate_robot_rbrt, articulate_robot_rbrt_batch,\
+from diffphys.dataloader import parse_amp
+from diffphys.torch_utils import NeRF
+from diffphys.robot import URDFRobot
+from diffphys.urdf_utils import articulate_robot_rbrt, articulate_robot_rbrt_batch,\
                                articulate_robot
-from ppr.geom_utils import se3_vec2mat, se3_mat2vec, rot_angle, vec_to_sim3, \
+from diffphys.geom_utils import se3_vec2mat, se3_mat2vec, rot_angle, vec_to_sim3, \
                                 create_base_se3, refine_rt, fid_reindex, axis_angle_to_matrix, quaternion_invert
 
 
 from warp.sim.articulation import eval_fk
-from ppr.import_urdf import parse_urdf
-from ppr.integrator_euler import SemiImplicitIntegrator
+from diffphys.import_urdf import parse_urdf
+from diffphys.integrator_euler import SemiImplicitIntegrator
 
 import warp as wp
 wp.init()

@@ -2,7 +2,7 @@ import numpy as np
 import json
 import sys
 import pdb
-from ppr.io import vis_kps
+from diffphys.io import vis_kps
 
 def parse_amp(amp_info):
   msm = {}
