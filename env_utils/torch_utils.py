@@ -3,39 +3,6 @@ import numpy as np
 import pdb
 import torch
 from torch import nn
-import torch.nn.functional as F
-from torch.nn.utils import clip_grad_norm_
-
-def clip_grad(model):
-    """
-    gradient clipping
-    """
-    is_invalid_grad=False
-    grad_mlp_act=[]
-    for name,p in model.named_parameters():
-        try: 
-            pgrad_nan = p.grad.isnan()
-            if pgrad_nan.sum()>0: 
-                print(name)
-                is_invalid_grad=True
-        except: pass
-        grad_mlp_act.append(p)
-    
-    grad_out = clip_grad_norm_(grad_mlp_act,    1)
-
-    if is_invalid_grad:
-        zero_grad_list(model.parameters())
-
-    return grad_out
-
-def zero_grad_list(paramlist):
-    """
-    Clears the gradients of all optimized :class:`torch.Tensor`
-    """
-    for p in paramlist:
-        if p.grad is not None:
-            p.grad.detach_()
-            p.grad.zero_()
 
 class NeRF(nn.Module):
     def __init__(self,

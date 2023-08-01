@@ -17,8 +17,10 @@ from nnutils.urdf_utils import articulate_robot_rbrt, articulate_robot_rbrt_batc
                                articulate_robot
 from nnutils.geom_utils import se3_vec2mat, se3_mat2vec, rot_angle, vec_to_sim3, \
                                 create_base_se3, refine_rt, fid_reindex, axis_angle_to_matrix, quaternion_invert
+
+
+from warp.sim.articulation import eval_fk
 from env_utils.import_urdf import parse_urdf
-from env_utils.articulation import eval_fk
 from env_utils.integrator_euler import SemiImplicitIntegrator
 
 import warp as wp
