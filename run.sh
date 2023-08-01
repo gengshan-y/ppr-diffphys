@@ -6,8 +6,8 @@ set +x
 exec "$@"
 
 ### training
-CUDA_VISIBLE_DEVICES=0 python main.py --logname spin --urdf_template laikago --seqname mi-spin 
-CUDA_VISIBLE_DEVICES=0 python main.py --logname trot --urdf_template laikago --seqname mi-trot 
-CUDA_VISIBLE_DEVICES=0 python main.py --logname pace --urdf_template laikago --seqname mi-pace 
-CUDA_VISIBLE_DEVICES=0 python main.py --logname sidesteps --urdf_template laikago --seqname mi-sidesteps 
-CUDA_VISIBLE_DEVICES=0 python main.py --logname turn --urdf_template laikago --seqname mi-turn 
+CUDA_VISIBLE_DEVICES=0 python main.py --urdf_template laikago --seqname mi-spin --logname 0 
+CUDA_VISIBLE_DEVICES=0 python main.py --urdf_template laikago --seqname mi-trot --logname 0 
+CUDA_VISIBLE_DEVICES=0 python main.py --urdf_template laikago --seqname mi-pace --logname 0 
+CUDA_VISIBLE_DEVICES=0 python main.py --urdf_template laikago --seqname mi-sidesteps --logname 0 
+CUDA_VISIBLE_DEVICES=0 python main.py --urdf_template laikago --seqname mi-turn --logname 0 

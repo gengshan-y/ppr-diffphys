@@ -8,7 +8,7 @@ import json
 class DataLoader:
     def __init__(self, opts, cap=-1):
         super(DataLoader).__init__()
-        datadir = './data/motion_sequences/%s/'%opts.seqname
+        datadir = './data/motion_sequences/%s/'%opts["seqname"]
         # load mesh
         gtmeshes = [trimesh.load(i,process=False) \
                 for i in sorted(glob.glob('./%s/*-mesh-*.obj'%(datadir)))]
@@ -28,8 +28,8 @@ class DataLoader:
             self.skins = np.load('./%s/val-rest-skin.npy'%(datadir))
         self.samp_int = 0.1 # s
         #self.samp_int = 0.02 # s
-        if os.path.exists('%s/amp-%s.txt'%(datadir, opts.seqname)):
-            with open ('%s/amp-%s.txt'%(datadir, opts.seqname), "r") as f:
+        if os.path.exists('%s/amp-%s.txt'%(datadir, opts["seqname"])):
+            with open ('%s/amp-%s.txt'%(datadir, opts["seqname"]), "r") as f:
                 self.amp_info = json.load(f)
                 self.samp_int = self.amp_info['FrameDuration']
                 self.amp_info = np.asarray(self.amp_info['Frames'])

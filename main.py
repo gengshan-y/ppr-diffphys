@@ -7,14 +7,13 @@ from diffphys.warp_env import phys_model
 from diffphys.vis import Logger
 from diffphys.dataloader import DataLoader
 
-opts = flags.FLAGS
 # distributed data parallel
 flags.DEFINE_integer("local_rank", 0, "for distributed training")
 flags.DEFINE_integer("ngpu", 1, "number of gpus to use")
 
 flags.DEFINE_integer("accu_steps", 1, "how many steps to do gradient accumulation")
 flags.DEFINE_string("seqname", "shiba-haru-1002", "name of the sequence")
-flags.DEFINE_string("checkpoint_dir", "logdir/", "Root directory for output files")
+flags.DEFINE_string("logroot", "logdir/", "Root directory for output files")
 flags.DEFINE_string("logname", "dynamics", "Experiment Name")
 flags.DEFINE_float("learning_rate", 2e-4, "learning rate")
 flags.DEFINE_integer("num_epochs", 5, "total update iterations")
@@ -25,19 +24,22 @@ flags.DEFINE_integer("iters_per_epoch", 100, "iters per epoch")
 
 
 def main(_):
+    opts = flags.FLAGS
+    opts = opts.flag_values_dict()
+
     vis = Logger(opts)
     dataloader = DataLoader(opts)
 
     # model
-    model = phys_model(opts, dataloader, dt=0.001)
+    model = phys_model(opts, dataloader)
     model.cuda()
 
     # opt
-    for it in range(opts.num_epochs * opts.iters_per_epoch + 1):
-        model.progress = it / (opts.num_epochs * opts.iters_per_epoch)
+    for it in range(opts["num_epochs"] * opts["iters_per_epoch"] + 1):
+        model.progress = it / (opts["num_epochs"] * opts["iters_per_epoch"])
 
         # eval
-        if it % opts.iters_per_epoch == 0:
+        if it % opts["iters_per_epoch"] == 0:
             # save net
             model.save_network(epoch_label=it)
 
@@ -51,7 +53,7 @@ def main(_):
             # model.reinit_envs(100, wdw_length=1,is_eval=False)
             model.reinit_envs(10, wdw_length=8, is_eval=False)
             ##TODO schedule window length
-            # wdw_length = int(0.5*(model.gt_steps - 1)/opts.total_iters*it + 1)
+            # wdw_length = int(0.5*(model.gt_steps - 1)/["total_iters"]*it + 1)
             # num_envs = max(1,int(100 / wdw_length))
             # print('wdw/envs: %d/%d'%(wdw_length, num_envs))
             # model.reinit_envs(num_envs, wdw_length=wdw_length,is_eval=False)
@@ -59,10 +61,10 @@ def main(_):
         # train
         t = time.time()
         loss = 0
-        for accu_it in range(opts.accu_steps):
+        for accu_it in range(opts["accu_steps"]):
             loss_dict = model.forward()
             loss += loss_dict["total_loss"]
-        loss = loss / float(opts.accu_steps)
+        loss = loss / float(opts["accu_steps"])
         model.backward(loss)
         grad_list = model.update()
         print(it)

@@ -25,10 +25,11 @@ class Logger:
         self.floor2=vedo.Plane(pos=(.5,0,.5),normal=(0,1,0), s=(dis*2,dis*2), c='green8',alpha=0.8)
     
         # save
-        self.save_path = "%s/%s/"%(opts.checkpoint_dir, opts.logname)
+        logname = "%s-%s" % (opts["seqname"], opts["logname"])
+        self.save_dir = os.path.join(opts["logroot"], logname)
         
         # tensorboard vis
-        self.log = SummaryWriter(self.save_path, comment=opts.logname)
+        self.log = SummaryWriter(self.save_dir, comment=opts["logname"])
 
 
     def show(self, tag, data):
@@ -57,8 +58,8 @@ class Logger:
         if use_gui:
             self.plt = vedo.Plotter(shape=(1,n_wdw), size=(n_wdw*resl, resl), bg="white", 
                 sharecam=True, resetcam=False)
-            video1 = vedo.Video("%s/simu-%s.gif"%(self.save_path, tag), backend='ffmpeg', fps=10)
-            video2 = vedo.Video("%s/simu-%s.mp4"%(self.save_path, tag), backend='opencv', fps=10)
+            video1 = vedo.Video("%s/simu-%s.gif"%(self.save_dir, tag), backend='ffmpeg', fps=10)
+            video2 = vedo.Video("%s/simu-%s.mp4"%(self.save_dir, tag), backend='opencv', fps=10)
             # find the center x/z location
             vis_offset = np.stack([i.vertices for i in data['xgt']],0)[0].mean(0)
             vis_offset[1] = 0; vis_offset = vis_offset[None]
@@ -123,9 +124,9 @@ class Logger:
             self.plt.close()
         else:
             for i in range(n_wdw):
-                save_vid("%s/vid%d-simu-%s"%(self.save_path, i, tag), 
+                save_vid("%s/vid%d-simu-%s"%(self.save_dir, i, tag), 
                         self.rendered_imgs[i],suffix='.gif',upsample_frame=0)
-                save_vid("%s/vid%d-simu-%s"%(self.save_path, i, tag), 
+                save_vid("%s/vid%d-simu-%s"%(self.save_dir, i, tag), 
                         self.rendered_imgs[i],suffix='.mp4',upsample_frame=0)
             self.renderer.delete()
         # TODO save to gltf (given bones etc.)

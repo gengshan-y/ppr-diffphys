@@ -341,9 +341,10 @@ class WarpBodyMLP(nn.Module):
 class phys_model(nn.Module):
     def __init__(self, opts, dataloader, dt=5e-4, use_dr=False, device="cuda"):
         super(phys_model, self).__init__()
-        dt = dt / 2
         self.opts = opts
-        self.save_dir = os.path.join(opts.checkpoint_dir, opts.logname)
+        logname = "%s-%s" % (opts["seqname"], opts["logname"])
+        self.save_dir = os.path.join(opts["logroot"], logname)
+
         self.dt = dt
         self.device = device
         if use_dr:
@@ -353,14 +354,14 @@ class phys_model(nn.Module):
         self.use_dr = use_dr
 
         # mlp
-        if opts.urdf_template == "a1":
+        if opts["urdf_template"] == "a1":
             urdf_path = "data/urdf_templates/a1/urdf/a1.urdf"
             in_bullet = True
             kp = 220.0
             kd = 2.0
             shape_ke = 1.0e4
             shape_kd = 0
-        elif opts.urdf_template == "wolf":
+        elif opts["urdf_template"] == "wolf":
             urdf_path = "data/urdf_templates/wolf.urdf"
             in_bullet = False
             self.joint_attach_ke = 32000.0
@@ -369,7 +370,7 @@ class phys_model(nn.Module):
             kd = 2.0
             shape_ke = 1000
             shape_kd = 100
-        elif opts.urdf_template == "wolf_mod":
+        elif opts["urdf_template"] == "wolf_mod":
             urdf_path = "data/urdf_templates/wolf_mod.urdf"
             in_bullet = False
             self.joint_attach_ke = 8000.0
@@ -382,7 +383,7 @@ class phys_model(nn.Module):
             # self.joint_attach_kd = 100.
             # kp=220.
             # kd=2.
-        elif opts.urdf_template == "laikago":
+        elif opts["urdf_template"] == "laikago":
             urdf_path = "data/urdf_templates/laikago/laikago.urdf"
             in_bullet = False
             self.joint_attach_ke = 16000.0
@@ -391,7 +392,7 @@ class phys_model(nn.Module):
             kd = 2.0
             shape_ke = 1.0e4
             shape_kd = 0
-        elif opts.urdf_template == "human":
+        elif opts["urdf_template"] == "human":
             urdf_path = "data/urdf_templates/human.urdf"
             in_bullet = False
             self.joint_attach_ke = 64000.0
@@ -400,7 +401,7 @@ class phys_model(nn.Module):
             kd = 2.0
             shape_ke = 1000
             shape_kd = 100
-        elif opts.urdf_template == "human_mod":
+        elif opts["urdf_template"] == "human_mod":
             urdf_path = "data/urdf_templates/human_mod.urdf"
             in_bullet = False
             self.joint_attach_ke = 8000.0
@@ -411,7 +412,7 @@ class phys_model(nn.Module):
             shape_kd = 100
             # kp=20.
             # kd=2.
-        elif opts.urdf_template == "human_amp":
+        elif opts["urdf_template"] == "human_amp":
             urdf_path = "data/urdf_templates/human_amp.urdf"
             in_bullet = False
             kp = 20.0
@@ -719,43 +720,43 @@ class phys_model(nn.Module):
             if "bg2fg_scale" in name:
                 # print('bg2fg_scale')
                 # print(p)
-                lr = 100 * opts.learning_rate  # explicit variables
+                lr = 100 * opts["learning_rate"]  # explicit variables
                 g_th = 0.1
             elif "bg2world" in name:
-                lr = 0 * opts.learning_rate  # do not update
+                lr = 0 * opts["learning_rate"]  # do not update
                 g_th = 0
             elif "global_q" in name:
-                lr = opts.learning_rate
+                lr = opts["learning_rate"]
                 g_th = 100
             elif "target_ke" == name or "target_kd" == name:
-                lr = 20 * opts.learning_rate
+                lr = 20 * opts["learning_rate"]
                 g_th = 0.1
             elif "attach_ke" == name or "attach_kd" == name:
-                lr = 20 * opts.learning_rate
+                lr = 20 * opts["learning_rate"]
                 g_th = 0.1
             elif "body_mass" == name:
-                lr = 20 * opts.learning_rate
+                lr = 20 * opts["learning_rate"]
                 g_th = 0.1
             elif "torque_mlp" in name:
-                lr = opts.learning_rate
+                lr = opts["learning_rate"]
                 g_th = 1
             elif "residual_f_mlp" in name:
-                lr = opts.learning_rate
+                lr = opts["learning_rate"]
                 g_th = 1
             elif "delta_root_mlp" in name:
-                lr = opts.learning_rate
+                lr = opts["learning_rate"]
                 g_th = 1
             elif "vel_mlp" in name:
-                lr = opts.learning_rate
+                lr = opts["learning_rate"]
                 g_th = 1
             elif "delta_joint_est_mlp" in name:
-                lr = opts.learning_rate
+                lr = opts["learning_rate"]
                 g_th = 1
             elif "delta_joint_ref_mlp" in name:
-                lr = opts.learning_rate
+                lr = opts["learning_rate"]
                 g_th = 1
             else:
-                lr = opts.learning_rate
+                lr = opts["learning_rate"]
                 g_th = 1
             lr_dict[name] = lr
             if clip_grad:
@@ -786,7 +787,7 @@ class phys_model(nn.Module):
         for name, lr in lr_dict.items():
             print("optimized params: %.5f/%s" % (lr, name))
 
-        self.optimizer = torch.optim.AdamW(params_list, lr=opts.learning_rate)
+        self.optimizer = torch.optim.AdamW(params_list, lr=opts["learning_rate"])
         # self.optimizer = torch.optim.SGD(
         # params_list,
         # lr=1)
@@ -794,7 +795,7 @@ class phys_model(nn.Module):
         self.scheduler = torch.optim.lr_scheduler.OneCycleLR(
             self.optimizer,
             list(lr_dict.values()),
-            int(opts.num_epochs * 200),
+            int(opts["num_epochs"] * 200),
             pct_start=0.02,  # use 2%
             cycle_momentum=False,
             anneal_strategy="linear",
@@ -998,7 +999,7 @@ class phys_model(nn.Module):
 
                 frame_start_all = []
                 # for vidid in range(len(self.data_offset)-1)[:9]:
-                for vidid in self.opts.phys_vid:
+                for vidid in self.opts["phys_vid"]:
                     # vidid=1
                     frame_start_sub = (
                         frame_start
@@ -1287,20 +1288,6 @@ class phys_model(nn.Module):
             foot_reg = foot_height.pow(2).mean()
             total_loss += foot_reg * 1e-4
 
-        # delta_joint_est_reg = delta_ja_est.pow(2).mean()
-        # total_loss += delta_joint_est_reg*1e-4
-        #
-        # delta_q_reg = delta_q.pow(2).mean()
-        # total_loss += delta_q_reg*1e-5
-        #
-        # delta_qd_reg = delta_qd.pow(2).mean()
-        # total_loss += delta_qd_reg*5e-5
-
-        ## smoothness
-        # cache_delta_root = self.delta_root_mlp(cache_steps_fr.reshape(-1,1))[:,0]
-        # cache_delta_root = se3_vec2mat(cache_delta_root)
-        # root_sm_loss = compute_root_sm_2nd_loss(cache_delta_root, self.data_offset, vid=self.opts.phys_vid)
-        # total_loss += 0.01*root_sm_loss
 
         if total_loss.isnan():
             pdb.set_trace()
@@ -1410,7 +1397,7 @@ class phys_model(nn.Module):
         return data
 
     def save_network(self, epoch_label):
-        if self.opts.local_rank == 0:
+        if self.opts["local_rank"] == 0:
             save_dict = self.state_dict()
             param_path = "%s/params_%03d.pth" % (self.save_dir, epoch_label)
             torch.save(save_dict, param_path)
