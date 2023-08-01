@@ -198,14 +198,15 @@ def pred_est_q(steps_fr, nerf_root_rts, nerf_body_rts, bg_rts):
     """
     bs, n_fr = steps_fr.shape
     device = steps_fr.device
-    data_offset = bg_rts.data_offset
+    data_offset = bg_rts.time_embedding.frame_offset
     vidid, _ = fid_reindex(steps_fr, len(data_offset) - 1, data_offset)
     vidid = vidid.long()
 
     # canonical to view
-    rt_base = create_base_se3(bs * n_fr, device)
-    pred_mat = nerf_root_rts(steps_fr.reshape(-1, 1))
-    pred_mat = refine_rt(rt_base, pred_mat)  # -1,3,4
+    from lab4d.utils.quat_transform import quaternion_translation_to_se3
+
+    quat_trans = nerf_root_rts.get_vals(steps_fr.reshape(-1).long())
+    pred_mat = quaternion_translation_to_se3(quat_trans)
 
     ##TODO further rotate along x axis
     # rot_offset = cv2.Rodrigues(np.asarray([0.2,0.,0.]))[0]
@@ -263,7 +264,7 @@ def pred_est_ja(steps_fr, nerf_body_rts, env):
     """
     bs, n_fr = steps_fr.shape
     device = steps_fr.device
-    data_offset = nerf_body_rts.data_offset
+    data_offset = nerf_body_rts.time_embedding.frame_offset
     vidid, _ = fid_reindex(steps_fr, len(data_offset) - 1, data_offset)
     vidid = vidid.long()
 
@@ -989,18 +990,7 @@ class phys_model(nn.Module):
             # get a batch of clips
             frame_start = torch.Tensor(np.random.rand(self.num_envs)).to(self.device)
             if self.use_dr:
-                # vid = np.random.randint(0,len(self.data_offset)-1)
-                ##vid = 2
-                # frame_start = (frame_start * (self.data_offset[vid+1]-\
-                #    self.data_offset[vid]-self.wdw_length)).round()
-                # frame_start = torch.clamp(frame_start, 0,np.inf).long()
-                # frame_start += self.data_offset[vid]
-
-                # frame_start = (frame_start * 30).round()
-                # frame_start += self.data_offset[4] + 100
-
                 frame_start_all = []
-                # for vidid in range(len(self.data_offset)-1)[:9]:
                 for vidid in self.opts["phys_vid"]:
                     # vidid=1
                     frame_start_sub = (
@@ -1028,16 +1018,7 @@ class phys_model(nn.Module):
                 )
         else:
             frame_start = frame_start[: self.num_envs]
-            ## avoid out of bound error when sample steps from the last seq
-            # if frame_start == 789: pdb.set_trace()
-            # max_step_limit = min(self.wdw_length, int(self.data_offset[-1]-frame_start) )
-            # self.wdw_length = max_step_limit # frames
-            # self.local_steps = range(self.skip_factor * self.wdw_length)
-            # self.local_steps_fr = self.local_steps_fr[:self.skip_factor*max_step_limit]
-            # self.wdw_length_full = len(self.local_steps)
-            # self.frame2step = self.frame2step[:max_step_limit+1]
 
-        # frame_start[:] = 0
         steps_fr = frame_start[:, None] + self.local_steps_fr[None]  # bs,T
         # TODO steps that are in the same seq
         vidid, _ = fid_reindex(
