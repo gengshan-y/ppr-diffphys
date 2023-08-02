@@ -3,7 +3,7 @@ import time
 from absl import app
 from absl import flags
 
-from diffphys.warp_env import phys_model
+from diffphys.dp_model import phys_model
 from diffphys.vis import Logger
 from diffphys.dataloader import DataLoader
 

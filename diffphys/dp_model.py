@@ -30,7 +30,7 @@ wp.init()
 
 
 class phys_model(nn.Module):
-    def __init__(self, opts, dataloader, dt=5e-4, use_dr=False, device="cuda"):
+    def __init__(self, opts, dataloader, dt=5e-4, device="cuda"):
         super(phys_model, self).__init__()
         self.opts = opts
         logname = "%s-%s" % (opts["seqname"], opts["logname"])
@@ -41,13 +41,11 @@ class phys_model(nn.Module):
         )
         self.progress = 0
 
+        self.use_dr = False
+
         self.dt = dt
         self.device = device
-        if use_dr:
-            self.preset_data_dr(dataloader)
-        else:
-            self.preset_data(dataloader)
-        self.use_dr = use_dr
+        self.preset_data(dataloader)
 
         data_dir = "%s/../" % os.path.dirname(__file__)
         if opts["urdf_template"] == "a1":
@@ -278,15 +276,6 @@ class phys_model(nn.Module):
         # other hypoter parameters
         self.th_multip = 0  # seems to cause problems
 
-    def pred_est_q(self, steps_fr):
-        out, obj2view = pred_est_q(steps_fr, self.obj_field, self.bg_field)
-        return out, obj2view
-
-    def pred_est_ja(self, steps_fr):
-        out = pred_est_ja(
-            steps_fr, self.obj_field.warp.articulation, self.env, self.robot
-        )
-        return out
 
     def set_progress(self, num_iters):
         self.progress = num_iters / self.total_iters
@@ -342,23 +331,10 @@ class phys_model(nn.Module):
                 state = self.env.state(requires_grad=True)
                 self.state_steps.append(state)
 
-            #            if not self.use_dr:
             self.env.collide(self.state_steps[0])  # ground contact, call it once
 
             setattr(self, env_name, self.env)
             setattr(self, state_name, self.state_steps)
-
-    def preset_data_dr(self, model_dict):
-        self.bg_field = model_dict["bg_field"]
-        self.obj_field = model_dict["obj_field"]
-        self.intrinsics = model_dict["intrinsics"]
-
-        self.data_offset = self.bg_field.camera_mlp.time_embedding.frame_offset
-        self.samp_int = 0.1
-        self.gt_steps = self.data_offset[-1] - 1
-        self.gt_steps_visible = self.gt_steps
-        self.max_steps = int(self.samp_int * self.gt_steps / self.dt)
-        self.skip_factor = self.max_steps // self.gt_steps
 
     def preset_data(self, dataloader):
         if hasattr(dataloader, "amp_info"):
@@ -491,21 +467,6 @@ class phys_model(nn.Module):
         self.optimizer.zero_grad()
         return grad_dict
 
-    def sample_sys_state(self, steps_fr):
-        bs, n_fr = steps_fr.shape
-        batch = {}
-        batch["target_q"], batch["obj2view"] = self.pred_est_q(steps_fr)
-        batch["target_ja"] = self.pred_est_ja(steps_fr)
-        # TODO this is problematic due to the discrete root pose
-        # batch['target_qd'] = self.compute_gradient(self.pred_est_q,  steps_fr.clone()) / self.samp_int
-        # batch['target_jad']= self.compute_gradient(self.pred_est_ja, steps_fr.clone()) / self.samp_int
-        batch["target_qd"] = torch.zeros_like(batch["target_q"])[..., :6]
-        batch["target_jad"] = torch.zeros_like(batch["target_ja"])
-        batch["ks"] = self.intrinsics.get_vals(steps_fr.reshape(-1).long()).reshape(
-            bs, n_fr, -1
-        )
-        return batch
-
     @staticmethod
     def get_batch_input(amp_info_func, steps_fr, in_bullet):
         """
@@ -625,15 +586,6 @@ class phys_model(nn.Module):
         res_f = res_f.reshape(nstep, -1, 6)
 
         return ref, state_q, state_qd, torques, res_f
-
-    def override_states(self):
-        self.delta_root_mlp.override_states(self.obj_field, self.bg_field)
-        self.delta_joint_est_mlp.override_states(self.obj_field.warp.articulation)
-        # self.delta_joint_ref_mlp.override_states(self.nerf_body_rts)
-
-    def override_states_inv(self):
-        self.delta_root_mlp.override_states_inv(self.obj_field, self.bg_field)
-        self.delta_joint_est_mlp.override_states_inv(self.obj_field.warp.articulation)
 
     def forward(self, frame_start=None):
         # capture requires cuda memory to be pre-allocated
@@ -839,20 +791,14 @@ class phys_model(nn.Module):
         )
 
         if self.use_dr:
-            # body_traj_d = body_traj[:,1:] - body_traj[:,:-1]
-            # body_target_d=body_target[:,1:] - body_target[:,:-1]
-            # loss_root = se3_loss(body_traj_d, body_target_d, rot_ratio=0).mean(-1)# [...,0] # bs,T, dof => bs,T
             loss_root = se3_loss(body_traj, body_target, rot_ratio=0)[
                 ..., 0
             ]  # [...,0] # bs,T, dof => bs,T
             loss_body = se3_loss(body_traj, body_target, rot_ratio=0)[..., 1:].mean(-1)
             loss_root = 0.2 * loss_root + 0.2 * loss_body
-            # loss_root = loss_root + 0.1*loss_body
-            # loss_root[:,0] *= 0 # set first t loss as 0
         else:
             loss_root = se3_loss(body_traj, body_target).mean(-1)
         loss_root[outseq_idx] = 0
-        # loss_root[outseq_idx[:,1:]] = 0
         loss_root = clip_loss(loss_root, 0.02 * self.th_multip)
         total_loss += 0.1 * loss_root
 

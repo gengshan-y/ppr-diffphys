@@ -1,7 +1,61 @@
 import copy
 import torch
-from diffphys.geom_utils import fid_reindex, se3_mat2vec
 import warp as wp
+import torch.nn as nn
+
+from diffphys.dp_model import phys_model
+from diffphys.geom_utils import fid_reindex, se3_mat2vec
+
+
+class phys_interface(phys_model):
+    def __init__(self, opts, dataloader, dt=5e-4, use_dr=False, device="cuda"):
+        super(phys_interface, self).__init__(opts, dataloader, dt, device)
+
+    def pred_est_q(self, steps_fr):
+        out, obj2view = pred_est_q(steps_fr, self.obj_field, self.bg_field)
+        return out, obj2view
+
+    def pred_est_ja(self, steps_fr):
+        out = pred_est_ja(
+            steps_fr, self.obj_field.warp.articulation, self.env, self.robot
+        )
+        return out
+    
+    def preset_data(self, model_dict):
+        self.bg_field = model_dict["bg_field"]
+        self.obj_field = model_dict["obj_field"]
+        self.intrinsics = model_dict["intrinsics"]
+
+        self.data_offset = self.bg_field.camera_mlp.time_embedding.frame_offset
+        self.samp_int = 0.1
+        self.gt_steps = self.data_offset[-1] - 1
+        self.gt_steps_visible = self.gt_steps
+        self.max_steps = int(self.samp_int * self.gt_steps / self.dt)
+        self.skip_factor = self.max_steps // self.gt_steps
+
+    def sample_sys_state(self, steps_fr):
+        bs, n_fr = steps_fr.shape
+        batch = {}
+        batch["target_q"], batch["obj2view"] = self.pred_est_q(steps_fr)
+        batch["target_ja"] = self.pred_est_ja(steps_fr)
+        # TODO this is problematic due to the discrete root pose
+        # batch['target_qd'] = self.compute_gradient(self.pred_est_q,  steps_fr.clone()) / self.samp_int
+        # batch['target_jad']= self.compute_gradient(self.pred_est_ja, steps_fr.clone()) / self.samp_int
+        batch["target_qd"] = torch.zeros_like(batch["target_q"])[..., :6]
+        batch["target_jad"] = torch.zeros_like(batch["target_ja"])
+        batch["ks"] = self.intrinsics.get_vals(steps_fr.reshape(-1).long()).reshape(
+            bs, n_fr, -1
+        )
+        return batch
+
+    def override_states(self):
+        self.delta_root_mlp.override_states(self.obj_field, self.bg_field)
+        self.delta_joint_est_mlp.override_states(self.obj_field.warp.articulation)
+        # self.delta_joint_ref_mlp.override_states(self.nerf_body_rts)
+
+    def override_states_inv(self):
+        self.delta_root_mlp.override_states_inv(self.obj_field, self.bg_field)
+        self.delta_joint_est_mlp.override_states_inv(self.obj_field.warp.articulation)
 
 
 class WarpRootMLP(nn.Module):
