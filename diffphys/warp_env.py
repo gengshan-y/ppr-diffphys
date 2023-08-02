@@ -316,6 +316,7 @@ class phys_model(nn.Module):
         self.total_iters = (
             opts["num_rounds"] * opts["iters_per_round"] * opts["ratio_phys_cycle"]
         )
+        self.progress = 0
 
         self.dt = dt
         self.device = device
