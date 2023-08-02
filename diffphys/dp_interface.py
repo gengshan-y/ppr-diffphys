@@ -37,7 +37,7 @@ class phys_interface(phys_model):
             steps_fr, self.obj_field.warp.articulation, self.env, self.robot
         )
         return out
-    
+
     def preset_data(self, model_dict):
         self.bg_field = model_dict["bg_field"]
         self.obj_field = model_dict["obj_field"]
@@ -74,7 +74,6 @@ class phys_interface(phys_model):
         self.delta_root_mlp.override_states_inv(self.obj_field, self.bg_field)
         self.delta_joint_est_mlp.override_states_inv(self.obj_field.warp.articulation)
 
-
     def compute_frame_start(self):
         frame_start = torch.Tensor(np.random.rand(self.num_envs)).to(self.device)
         frame_start_all = []
@@ -96,21 +95,22 @@ class phys_interface(phys_model):
         frame_start = frame_start[rand_list[: self.num_envs]]
         return frame_start
 
-    @torch.no_grad()
     def get_batch_input(self, steps_fr):
-        # get mlp data
-        batch = self.sample_sys_state(steps_fr)
-        target_q, target_ja, target_qd, target_jad = (
-            batch["target_q"],
-            batch["target_ja"],
-            batch["target_qd"],
-            batch["target_jad"],
-        )
-        self.target_q_vis = target_q[:, self.frame2step].clone()
-        self.obj2view_vis = batch["obj2view"][:, self.frame2step].clone()
-        self.ks_vis = batch["ks"][:, self.frame2step].clone()
+        with torch.no_grad():
+            batch = self.sample_sys_state(steps_fr)
+            target_q, target_ja, target_qd, target_jad = (
+                batch["target_q"],
+                batch["target_ja"],
+                batch["target_qd"],
+                batch["target_jad"],
+            )
+            self.target_q_vis = target_q[:, self.frame2step].clone()
+            self.obj2view_vis = batch["obj2view"][:, self.frame2step].clone()
+            self.ks_vis = batch["ks"][:, self.frame2step].clone()
 
-        target_body_q, target_body_qd, msm = self.combine_targets(target_q, target_ja, target_qd, target_jad)
+        target_body_q, target_body_qd, msm = self.combine_targets(
+            target_q, target_ja, target_qd, target_jad
+        )
 
         (
             torques,
@@ -121,8 +121,17 @@ class phys_interface(phys_model):
             res_f,
         ) = self.get_net_pred(steps_fr)
 
-        return target_body_q, target_body_qd, msm, ref_ja, est_q, est_ja, state_qd, torques, res_f
-
+        return (
+            target_body_q,
+            target_body_qd,
+            msm,
+            ref_ja,
+            est_q,
+            est_ja,
+            state_qd,
+            torques,
+            res_f,
+        )
 
     def get_foot_height(self, state_body_q):
         kp_idxs = [
@@ -133,6 +142,7 @@ class phys_interface(phys_model):
         kp_idxs = [self.dict_unique_body_inv[it] for it in kp_idxs]
         foot_height = state_body_q[:, :, kp_idxs, 1]
         return foot_height
+
 
 class WarpRootMLP(nn.Module):
     def __init__(self, banmo_root_mlp, banmo_body_mlp, banmo_bg_mlp):
@@ -172,7 +182,6 @@ class WarpBodyMLP(nn.Module):
 
     def override_states_inv(self, banmo_mlp):
         banmo_mlp.load_state_dict(self.mlp.state_dict())
-
 
 
 def pred_est_q(steps_fr, obj_field, bg_field):
@@ -235,4 +244,3 @@ def pred_est_ja(steps_fr, nerf_body_rts, env, robot):
     # B+1, 7 coordinates of end effectors
     env.joint_X_p = wp.from_torch(joint_X_p, dtype=wp.transform)
     return pred_joints
-

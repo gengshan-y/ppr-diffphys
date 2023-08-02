@@ -1140,17 +1140,19 @@ class ForwardWarp(torch.autograd.Function):
         print("max grad:")
         print(torch.cat([i.reshape(-1) for i in grad]).abs().max())
 
-        try:
+        if ctx.q_init.requires_grad:
             q_init_grad = wp.to_torch(ctx.tape.gradients[ctx.q_init]).clone()
             remove_nan(q_init_grad, self.num_envs)
-        except:
+        else:
             q_init_grad = None
+            print("q_init does not require grad")
 
-        try:
+        if ctx.qd_init.requires_grad:
             qd_init_grad = wp.to_torch(ctx.tape.gradients[ctx.qd_init]).clone()
             remove_nan(qd_init_grad, self.num_envs)
-        except:
+        else:
             qd_init_grad = None
+            print("qd_init does not require grad")
 
         refs_grad = [
             wp.to_torch(ctx.tape.gradients[i]) for i in ctx.refs if i.requires_grad
@@ -1160,6 +1162,7 @@ class ForwardWarp(torch.autograd.Function):
             remove_nan(refs_grad, self.num_envs)
         else:
             refs_grad = None
+            print("refs does not require grad")
 
         torques_grad = [
             wp.to_torch(ctx.tape.gradients[i]) for i in ctx.torques if i.requires_grad
@@ -1169,6 +1172,7 @@ class ForwardWarp(torch.autograd.Function):
             remove_nan(torques_grad, self.num_envs)
         else:
             torques_grad = None
+            print("torques does not require grad")
 
         res_f_grad = [
             wp.to_torch(ctx.tape.gradients[i]) for i in ctx.res_f if i.requires_grad
@@ -1178,21 +1182,28 @@ class ForwardWarp(torch.autograd.Function):
             remove_nan(res_f_grad, self.num_envs)
         else:
             res_f_grad = None
+            print("res_f does not require grad")
 
-        try:
+        if ctx.target_kd.requires_grad:
             target_kd_grad = wp.to_torch(ctx.tape.gradients[ctx.target_kd]).clone()
+            remove_nan(target_kd_grad, self.num_envs)
+        else:
+            target_kd_grad = None
+            print("target_kd does not require grad")
+
+        if ctx.target_ke.requires_grad:
             target_ke_grad = wp.to_torch(ctx.tape.gradients[ctx.target_ke]).clone()
             remove_nan(target_ke_grad, self.num_envs)
-            remove_nan(target_kd_grad, self.num_envs)
-        except:
-            target_kd_grad = None
+        else:
             target_ke_grad = None
+            print("target_ke does not require grad")
 
-        try:
+        if ctx.body_mass.requires_grad:
             body_mass_grad = wp.to_torch(ctx.tape.gradients[ctx.body_mass]).clone()
             remove_nan(body_mass_grad, self.num_envs)
-        except:
+        else:
             body_mass_grad = None
+            print("body_mass does not require grad")
 
         ctx.tape.zero()
         return (
