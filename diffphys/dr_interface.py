@@ -1,6 +1,7 @@
 import copy
 import torch
 import warp as wp
+import numpy as np
 import torch.nn as nn
 
 from diffphys.dp_model import phys_model
@@ -10,6 +11,23 @@ from diffphys.geom_utils import fid_reindex, se3_mat2vec
 class phys_interface(phys_model):
     def __init__(self, opts, dataloader, dt=5e-4, use_dr=False, device="cuda"):
         super(phys_interface, self).__init__(opts, dataloader, dt, device)
+
+    def init_global_q(self):
+        self.global_q = nn.Parameter(
+            torch.cuda.FloatTensor([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0])
+        )
+
+    def add_nn_modules(self):
+        super().add_nn_modules()
+        # TODO create new modules
+        self.delta_joint_est_mlp = WarpBodyMLP(self.obj_field.warp.articulation)
+        self.delta_root_mlp = WarpRootMLP(
+            self.obj_field, self.delta_joint_est_mlp, self.bg_field
+        )
+
+    def reinit_envs(self, num_envs, wdw_length, is_eval=False, overwrite=False):
+        super().reinit_envs(num_envs, wdw_length, is_eval, overwrite)
+        self.env.gravity[1] = -5.0
 
     def pred_est_q(self, steps_fr):
         out, obj2view = pred_est_q(steps_fr, self.obj_field, self.bg_field)
@@ -57,6 +75,66 @@ class phys_interface(phys_model):
         self.delta_root_mlp.override_states_inv(self.obj_field, self.bg_field)
         self.delta_joint_est_mlp.override_states_inv(self.obj_field.warp.articulation)
 
+
+    def compute_frame_start(self):
+        frame_start = torch.Tensor(np.random.rand(self.num_envs)).to(self.device)
+        frame_start_all = []
+        for vidid in self.opts["phys_vid"]:
+            # vidid=1
+            frame_start_sub = (
+                frame_start
+                * (
+                    self.data_offset[vidid + 1]
+                    - self.data_offset[vidid]
+                    - self.wdw_length
+                )
+            ).round()
+            frame_start_sub = torch.clamp(frame_start_sub, 0, np.inf).long()
+            frame_start_sub += self.data_offset[vidid]
+            frame_start_all.append(frame_start_sub)
+        frame_start = torch.cat(frame_start_all, 0)
+        rand_list = np.asarray(range(frame_start.shape[0]))
+        np.random.shuffle(rand_list)
+        frame_start = frame_start[rand_list[: self.num_envs]]
+        return frame_start
+
+    @torch.no_grad()
+    def get_batch_input(self, steps_fr):
+        # get mlp data
+        batch = self.sample_sys_state(steps_fr)
+        target_q, target_ja, target_qd, target_jad = (
+            batch["target_q"],
+            batch["target_ja"],
+            batch["target_qd"],
+            batch["target_jad"],
+        )
+        self.target_q_vis = target_q[:, self.frame2step].clone()
+        self.obj2view_vis = batch["obj2view"][:, self.frame2step].clone()
+        self.ks_vis = batch["ks"][:, self.frame2step].clone()
+
+        target_body_q, target_body_qd, msm = self.combine_targets(target_q, target_ja, target_qd, target_jad)
+
+        (
+            torques,
+            est_q,
+            ref_ja,
+            est_ja,
+            state_qd,
+            res_f,
+        ) = self.get_net_pred(steps_fr)
+
+        return target_body_q, target_body_qd, msm, ref_ja, est_q, est_ja, state_qd, torques, res_f
+
+
+    def get_foot_height(self, state_body_q):
+        kp_idxs = [
+            it
+            for it, link in enumerate(self.robot.urdf.links)
+            if link.name in self.robot.urdf.kp_links
+        ]
+        kp_idxs = [self.dict_unique_body_inv[it] for it in kp_idxs]
+        foot_height = state_body_q[:, :, kp_idxs, 1]
+        return foot_height
 
 class WarpRootMLP(nn.Module):
     def __init__(self, banmo_root_mlp, banmo_body_mlp, banmo_bg_mlp):

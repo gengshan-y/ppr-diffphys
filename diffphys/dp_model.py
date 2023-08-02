@@ -36,12 +36,10 @@ class phys_model(nn.Module):
         logname = "%s-%s" % (opts["seqname"], opts["logname"])
         self.save_dir = os.path.join(opts["logroot"], logname)
 
-        self.total_iters = (
+        self.total_iters = int(
             opts["num_rounds"] * opts["iters_per_round"] * opts["ratio_phys_cycle"]
         )
         self.progress = 0
-
-        self.use_dr = False
 
         self.dt = dt
         self.device = device
@@ -186,15 +184,7 @@ class phys_model(nn.Module):
         self.integrator = SemiImplicitIntegrator()
 
         # torch parameters
-        if self.use_dr:
-            self.global_q = nn.Parameter(
-                torch.cuda.FloatTensor([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0])
-            )
-        else:
-            self.global_q = nn.Parameter(
-                torch.cuda.FloatTensor([0.0, -0.03, 0.0, 0.0, 0.0, 0.0, 1.0])
-            )
-        # self.global_q = nn.Parameter( torch.cuda.FloatTensor([0.,-0.042,0.,0.,0.,0.,1.]) )
+        self.init_global_q()
 
         self.target_ke = nn.Parameter(
             torch.cuda.FloatTensor(self.articulation_builder.joint_target_ke)
@@ -206,7 +196,22 @@ class phys_model(nn.Module):
             torch.cuda.FloatTensor(self.articulation_builder.body_mass)
         )
 
-        # TODO
+        self.add_nn_modules()
+
+        # optimizer
+        self.add_optimizer(opts)
+        self.total_loss_hist = []
+
+        # other hypoter parameters
+        self.th_multip = 0  # seems to cause problems
+
+
+    def init_global_q(self):
+        self.global_q = nn.Parameter(
+            torch.cuda.FloatTensor([0.0, -0.03, 0.0, 0.0, 0.0, 0.0, 1.0])
+        )
+
+    def add_nn_modules(self):
         self.torque_mlp = NeRF(
             tscale=1.0 / self.gt_steps,
             N_freqs=6,
@@ -260,22 +265,6 @@ class phys_model(nn.Module):
             out_channels=self.n_dof,
             in_channels_xyz=13,
         )
-
-        if self.use_dr:
-            # TODO create new modules
-            self.delta_joint_est_mlp = WarpBodyMLP(self.obj_field.warp.articulation)
-            self.delta_root_mlp = WarpRootMLP(
-                self.obj_field, self.delta_joint_est_mlp, self.bg_field
-            )
-            # self.delta_joint_ref_mlp = WarpBodyMLP(self.nerf_body_rts)
-
-        # optimizer
-        self.add_optimizer(opts)
-        self.total_loss_hist = []
-
-        # other hypoter parameters
-        self.th_multip = 0  # seems to cause problems
-
 
     def set_progress(self, num_iters):
         self.progress = num_iters / self.total_iters
@@ -444,7 +433,7 @@ class phys_model(nn.Module):
         self.scheduler = torch.optim.lr_scheduler.OneCycleLR(
             self.optimizer,
             list(lr_dict.values()),
-            int(self.total_iters),
+            self.total_iters,
             pct_start=0.02,  # use 2%
             cycle_momentum=False,
             anneal_strategy="linear",
@@ -466,28 +455,6 @@ class phys_model(nn.Module):
         self.scheduler.step()
         self.optimizer.zero_grad()
         return grad_dict
-
-    @staticmethod
-    def get_batch_input(amp_info_func, steps_fr, in_bullet):
-        """
-        steps_fr: bs, T
-        target_q:    bs,T,7
-        target_ja:  bs,T,dof
-        """
-        # pos/orn/ref joints from data
-        amp_info = amp_info_func(steps_fr.cpu().numpy())
-        msm = parse_amp(amp_info)
-        bullet2gl(msm, in_bullet)
-        target_ja = torch.cuda.FloatTensor(msm["jang"])
-        target_pos = torch.cuda.FloatTensor(msm["pos"])
-        target_orn = torch.cuda.FloatTensor(msm["orn"])
-        target_jad = torch.cuda.FloatTensor(msm["jvel"])
-        target_vel = torch.cuda.FloatTensor(msm["vel"])
-        target_avel = torch.cuda.FloatTensor(msm["avel"])
-
-        target_q = torch.cat([target_pos[..., :], target_orn[..., :]], -1)  # bs, T, 7
-        target_qd = torch.cat([target_vel[..., :], target_avel[..., :]], -1)  # bs, T, 6
-        return target_q, target_ja, target_qd, target_jad
 
     @staticmethod
     def compose_delta(target_q, delta_root):
@@ -568,7 +535,7 @@ class phys_model(nn.Module):
         return torques, delta_root, delta_ja_ref, delta_ja_est, vel_pred, res_f
 
     @staticmethod
-    def rearrange_pred(est_q, est_ja, ref, est_qd, torques, res_f):
+    def rearrange_pred(est_q, est_ja, ref_ja, state_qd, torques, res_f):
         """
         est_q:       bs,T,7
         state_qd     bs,6
@@ -579,13 +546,85 @@ class phys_model(nn.Module):
         state_q = torch.cat([est_q, est_ja], -1)
 
         # N, bs*...
+        ref = torch.cat([torch.zeros_like(ref_ja[..., :1].repeat(1, 1, 6)), ref_ja], -1)
         ref = ref.permute(1, 0, 2).reshape(nstep, -1)
         state_q = state_q.permute(1, 0, 2).reshape(nstep, -1)
-        state_qd = est_qd.permute(1, 0, 2).reshape(nstep, -1)
+        state_qd = state_qd.permute(1, 0, 2).reshape(nstep, -1)
         torques = torques.reshape(nstep, -1)
         res_f = res_f.reshape(nstep, -1, 6)
 
         return ref, state_q, state_qd, torques, res_f
+
+    def get_foot_height(self, state_body_q):
+        mesh_pts, faces_single = articulate_robot_rbrt_batch(
+            self.robot.urdf, state_body_q
+        )
+        foot_height = mesh_pts[..., 1].min(-1)[0]  # bs,T #TODO all foot
+        return foot_height
+
+    def compute_frame_start(self):
+        frame_start = torch.Tensor(np.random.rand(self.num_envs)).to(self.device)
+        frame_start = (
+            (frame_start * (self.gt_steps_visible - self.wdw_length))
+            .round()
+            .long()
+        )
+        return frame_start
+
+    def combine_targets(self, target_q, target_ja, target_qd, target_jad):
+        # combine targets
+        q_at_frame = torch.cat([target_q, target_ja], -1)[:, self.frame2step]
+        qd_at_frame = torch.cat([target_qd, target_jad], -1)[:, self.frame2step]
+        q_at_frame = q_at_frame.permute(1, 0, 2).contiguous()
+        qd_at_frame = qd_at_frame.permute(1, 0, 2).contiguous()
+        target_body_q, target_body_qd, msm = ForwardKinematics.apply(
+            q_at_frame, qd_at_frame, self
+        )
+        return target_body_q, target_body_qd, msm
+
+    def get_batch_input(self, steps_fr):
+        """
+        get mocap data
+        steps_fr: bs, T
+        target_q:    bs,T,7
+        target_ja:  bs,T,dof
+        """
+        # pos/orn/ref joints from data
+        amp_info = self.amp_info_func(steps_fr.cpu().numpy())
+        msm = parse_amp(amp_info)
+        bullet2gl(msm, self.in_bullet)
+        target_ja = torch.cuda.FloatTensor(msm["jang"])
+        target_pos = torch.cuda.FloatTensor(msm["pos"])
+        target_orn = torch.cuda.FloatTensor(msm["orn"])
+        target_jad = torch.cuda.FloatTensor(msm["jvel"])
+        target_vel = torch.cuda.FloatTensor(msm["vel"])
+        target_avel = torch.cuda.FloatTensor(msm["avel"])
+
+        target_q = torch.cat([target_pos[..., :], target_orn[..., :]], -1)  # bs, T, 7
+        target_qd = torch.cat([target_vel[..., :], target_avel[..., :]], -1)  # bs, T, 6
+
+        # transform to ground
+        target_q = rotate_frame(self.global_q, target_q)
+        target_qd = rotate_frame_vel(self.global_q, target_qd)
+
+        target_body_q, target_body_qd, msm = self.combine_targets(target_q, target_ja, target_qd, target_jad)
+        
+        # combine preds
+        (
+            torques,
+            delta_q,
+            delta_ja_ref,
+            delta_ja_est,
+            state_qd,
+            res_f,
+        ) = self.get_net_pred(steps_fr)
+
+        # refine
+        est_q = self.compose_delta(target_q, delta_q)  # delta x target
+        est_ja = target_ja + delta_ja_est
+        ref_ja = target_ja + delta_ja_ref
+
+        return target_body_q, target_body_qd, msm, ref_ja, est_q, est_ja, state_qd, torques, res_f
 
     def forward(self, frame_start=None):
         # capture requires cuda memory to be pre-allocated
@@ -594,44 +633,10 @@ class phys_model(nn.Module):
         # this launch is not recorded in tape
         # wp.capture_launch(self.graph)
 
-        # gravity = np.interp(self.progress, [0,1], [2., 2.])
-        # print('gravity mag: %f/%f'%(self.progress, gravity))
-        # self.env.gravity[1] = -gravity
-        if self.use_dr:
-            # self.env.gravity[1] = 0
-            self.env.gravity[1] = -5
-        # self.env.gravity[1] = 0
-        # self.env.gravity[1] = -1
-
         # get a batch of ref pos/orn/joints
         if frame_start is None:
             # get a batch of clips
-            frame_start = torch.Tensor(np.random.rand(self.num_envs)).to(self.device)
-            if self.use_dr:
-                frame_start_all = []
-                for vidid in self.opts["phys_vid"]:
-                    # vidid=1
-                    frame_start_sub = (
-                        frame_start
-                        * (
-                            self.data_offset[vidid + 1]
-                            - self.data_offset[vidid]
-                            - self.wdw_length
-                        )
-                    ).round()
-                    frame_start_sub = torch.clamp(frame_start_sub, 0, np.inf).long()
-                    frame_start_sub += self.data_offset[vidid]
-                    frame_start_all.append(frame_start_sub)
-                frame_start = torch.cat(frame_start_all, 0)
-                rand_list = np.asarray(range(frame_start.shape[0]))
-                np.random.shuffle(rand_list)
-                frame_start = frame_start[rand_list[: self.num_envs]]
-            else:
-                frame_start = (
-                    (frame_start * (self.gt_steps_visible - self.wdw_length))
-                    .round()
-                    .long()
-                )
+            frame_start = self.compute_frame_start()
         else:
             frame_start = frame_start[: self.num_envs]
 
@@ -642,68 +647,16 @@ class phys_model(nn.Module):
         )
         outseq_idx = (vidid[:, :1] - vidid) != 0
 
-        if self.use_dr:
-            with torch.no_grad():
-                # get mlp data
-                batch = self.sample_sys_state(steps_fr)
-                target_q, target_ja, target_qd, target_jad = (
-                    batch["target_q"],
-                    batch["target_ja"],
-                    batch["target_qd"],
-                    batch["target_jad"],
-                )
-                self.target_q_vis = target_q[:, self.frame2step].clone()
-                self.obj2view_vis = batch["obj2view"][:, self.frame2step].clone()
-                self.ks_vis = batch["ks"][:, self.frame2step].clone()
-        else:
-            # get mocap data
-            target_q, target_ja, target_qd, target_jad = self.get_batch_input(
-                self.amp_info_func, steps_fr, self.in_bullet
-            )
-
-        # transform to ground
-        if not self.use_dr:
-            target_q = rotate_frame(self.global_q, target_q)
-            target_qd = rotate_frame_vel(self.global_q, target_qd)
 
         # compute target pos/vel
-        q_at_frame = torch.cat([target_q, target_ja], -1)[:, self.frame2step]
-        qd_at_frame = torch.cat([target_qd, target_jad], -1)[:, self.frame2step]
-        q_at_frame = q_at_frame.permute(1, 0, 2).contiguous()
-        qd_at_frame = qd_at_frame.permute(1, 0, 2).contiguous()
-        target_body_q, target_body_qd, msm = ForwardKinematics.apply(
-            q_at_frame, qd_at_frame, self
-        )
-        self.msm = msm
-
         beg = time.time()
-        (
-            torques,
-            delta_q,
-            delta_ja_ref,
-            delta_ja_est,
-            delta_qd,
-            res_f,
-        ) = self.get_net_pred(steps_fr)
-        # if not self.training:
-        #    res_f *= 0
-        if self.use_dr:
-            est_q = delta_q
-            est_ja = delta_ja_est
-            ref_ja = delta_ja_ref
-            # delta_ja_ref = target_ja.detach() - ref_ja
-            est_qd = delta_qd
-        else:
-            est_q = self.compose_delta(target_q, delta_q)  # delta x target
-            est_ja = target_ja + delta_ja_est
-            ref_ja = target_ja + delta_ja_ref
-            est_qd = delta_qd
-
-        ref = torch.cat([torch.zeros_like(ref_ja[..., :1].repeat(1, 1, 6)), ref_ja], -1)
+        target_body_q, target_body_qd, self.msm, ref_ja, est_q, est_ja, state_qd, torques, res_f = \
+            self.get_batch_input(steps_fr)
 
         ref, state_q, state_qd, torques, res_f = self.rearrange_pred(
-            est_q, est_ja, ref, est_qd, torques, res_f
+            est_q, est_ja, ref_ja, state_qd, torques, res_f
         )
+
         # forward simulation
         res_fin = res_f.clone()
         q_init = state_q[0]
@@ -755,24 +708,7 @@ class phys_model(nn.Module):
         )
 
         # make sure the feet is above the ground
-        if self.use_dr:
-            kp_idxs = [
-                it
-                for it, link in enumerate(self.robot.urdf.links)
-                if link.name in self.robot.urdf.kp_links
-            ]
-            kp_idxs = [self.dict_unique_body_inv[it] for it in kp_idxs]
-            foot_height = state_body_q[:, :, kp_idxs, 1]
-            self.state_body_kps = state_body_q[:, :, kp_idxs]
-        else:
-            mesh_pts, faces_single = articulate_robot_rbrt_batch(
-                self.robot.urdf, state_body_q
-            )
-            foot_height = mesh_pts[..., 1].min(-1)[0]  # bs,T #TODO all foot
-        # foot_offset = F.relu(-foot_height).max() # if h<0, make it 0; if h>0, don't do anything
-        # target_body_q[...,1] += foot_offset # bs, 7
-        # target_q[...,1] += foot_offset
-        # self.global_q.data[1] += foot_offset
+        foot_height = self.get_foot_height(state_body_q)
 
         total_loss = 0
         # root loss
@@ -790,14 +726,7 @@ class phys_model(nn.Module):
             1, 0, 2, 3
         )
 
-        if self.use_dr:
-            loss_root = se3_loss(body_traj, body_target, rot_ratio=0)[
-                ..., 0
-            ]  # [...,0] # bs,T, dof => bs,T
-            loss_body = se3_loss(body_traj, body_target, rot_ratio=0)[..., 1:].mean(-1)
-            loss_root = 0.2 * loss_root + 0.2 * loss_body
-        else:
-            loss_root = se3_loss(body_traj, body_target).mean(-1)
+        loss_root = se3_loss(body_traj, body_target).mean(-1)
         loss_root[outseq_idx] = 0
         loss_root = clip_loss(loss_root, 0.02 * self.th_multip)
         total_loss += 0.1 * loss_root
@@ -840,28 +769,11 @@ class phys_model(nn.Module):
         total_loss += res_f_reg * 5e-5
         # total_loss += res_f_reg*1e-5
 
-        delta_joint_ref_reg = delta_ja_ref.pow(2).mean()
+        # delta_joint_ref_reg = delta_ja_ref.pow(2).mean()
         # total_loss += delta_joint_ref_reg*1e-4
-
-        if self.use_dr:
-            foot_reg = foot_height.pow(2).view(-1)
-            # foot_reg = foot_reg.mean()
-            # total_loss = total_loss*0 + foot_reg*1e-2
-            # print(foot_height.max())
-            # print(self.global_q)
-            if self.progress < 0.4:
-                foot_reg = foot_reg.topk(foot_reg.shape[0] * 4 // 5, largest=False)[
-                    0
-                ].mean()
-                # total_loss += foot_reg*1e-2
-            else:
-                foot_reg = foot_reg.topk(foot_reg.shape[0] * 2 // 4, largest=False)[
-                    0
-                ].mean()
-                # total_loss += foot_reg*1e-4
-        else:
-            foot_reg = foot_height.pow(2).mean()
-            total_loss += foot_reg * 1e-4
+        
+        foot_reg = foot_height.pow(2).mean()
+        # total_loss += foot_reg * 1e-4
 
         if total_loss.isnan():
             pdb.set_trace()
@@ -877,9 +789,7 @@ class phys_model(nn.Module):
                 self.total_loss_hist.append(total_loss.detach().cpu())
         else:
             self.total_loss_hist.append(total_loss.detach().cpu())
-        # print(delta_joint_reg)
-        # print(delta_q_reg)
-        # print(loss_vel)
+
 
         loss_dict = {}
         loss_dict["total_loss"] = total_loss
@@ -889,14 +799,11 @@ class phys_model(nn.Module):
         loss_dict["loss_vel_state"] = loss_vel_state
         loss_dict["torque_reg"] = torque_reg
         loss_dict["res_f_reg"] = res_f_reg
-        loss_dict["delta_joint_ref_reg"] = delta_joint_ref_reg
         loss_dict["foot_reg"] = foot_reg
         # print(self.target_ke)
         # print(self.target_kd)
         # print(self.body_mass)
-        # loss_dict['delta_joint_est_reg'] = delta_joint_est_reg
-        # loss_dict['delta_q_reg'] = delta_q_reg
-        # loss_dict['delta_qd_reg'] = delta_qd_reg
+
         return loss_dict
 
     def backward(self, loss):
@@ -1021,21 +928,6 @@ class ForwardKinematics(torch.autograd.Function):
             msm = []
             for it, step in enumerate(self.frame2step):
                 step = it
-                # rj_q_sub = rj_q[...,it,:].reshape(-1)
-                # rj_q_sub = wp.from_torch(rj_q_sub)
-                # ctx.rj_q.append(rj_q_sub)
-                # if rj_qd is None:
-                #    rj_qd_sub = torch.cuda.FloatTensor(np.zeros(bs*(ndof-1)))
-                # else:
-                #    rj_qd_sub = rj_qd[...,it,:]
-                # rj_qd_sub = wp.from_torch(rj_qd_sub.reshape(-1))
-                # ctx.rj_qd.append(rj_qd_sub)
-                # eval_fk(
-                #    self.env,
-                #    rj_q_sub,
-                #    rj_qd_sub,
-                #    None,
-                #    ctx.state_steps[step]) #
                 eval_fk(
                     self.env, ctx.rj_q[it], ctx.rj_qd[it], None, ctx.state_steps[step]
                 )  #

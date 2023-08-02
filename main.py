@@ -36,7 +36,7 @@ def main(_):
     model.cuda()
 
     # opt
-    for it in range(opts["num_rounds"] * opts["iters_per_round"] + 1):
+    for it in range(model.total_iters):
         model.progress = it / (opts["num_rounds"] * opts["iters_per_round"])
 
         # eval
