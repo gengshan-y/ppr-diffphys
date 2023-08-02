@@ -9,7 +9,7 @@ from diffphys.geom_utils import fid_reindex, se3_mat2vec
 
 
 class phys_interface(phys_model):
-    def __init__(self, opts, dataloader, dt=5e-4, use_dr=False, device="cuda"):
+    def __init__(self, opts, dataloader, dt=5e-4, device="cuda"):
         super(phys_interface, self).__init__(opts, dataloader, dt, device)
 
     def init_global_q(self):
@@ -19,7 +19,6 @@ class phys_interface(phys_model):
 
     def add_nn_modules(self):
         super().add_nn_modules()
-        # TODO create new modules
         self.delta_joint_est_mlp = WarpBodyMLP(self.obj_field.warp.articulation)
         self.delta_root_mlp = WarpRootMLP(
             self.obj_field, self.delta_joint_est_mlp, self.bg_field
@@ -80,7 +79,6 @@ class phys_interface(phys_model):
         frame_start = torch.Tensor(np.random.rand(self.num_envs)).to(self.device)
         frame_start_all = []
         for vidid in self.opts["phys_vid"]:
-            # vidid=1
             frame_start_sub = (
                 frame_start
                 * (

@@ -11,9 +11,7 @@ from scipy.spatial.transform import Rotation as R
 from diffphys.dataloader import parse_amp
 from diffphys.torch_utils import NeRF
 from diffphys.robot import URDFRobot
-from diffphys.urdf_utils import (
-    articulate_robot_rbrt_batch
-)
+from diffphys.urdf_utils import articulate_robot_rbrt_batch
 from diffphys.geom_utils import (
     se3_vec2mat,
     se3_mat2vec,
@@ -23,9 +21,19 @@ from diffphys.geom_utils import (
 from warp.sim.articulation import eval_fk
 from diffphys.import_urdf import parse_urdf
 from diffphys.integrator_euler import SemiImplicitIntegrator
-from diffphys.dp_utils import rotate_frame, rotate_frame_vel, compute_com, clip_loss, se3_loss, can2gym2gl, remove_nan, bullet2gl
+from diffphys.dp_utils import (
+    rotate_frame,
+    rotate_frame_vel,
+    compute_com,
+    clip_loss,
+    se3_loss,
+    can2gym2gl,
+    remove_nan,
+    bullet2gl,
+)
 
 import warp as wp
+
 wp.init()
 
 
@@ -204,7 +212,6 @@ class phys_model(nn.Module):
 
         # other hypoter parameters
         self.th_multip = 0  # seems to cause problems
-
 
     def init_global_q(self):
         self.global_q = nn.Parameter(
@@ -565,9 +572,7 @@ class phys_model(nn.Module):
     def compute_frame_start(self):
         frame_start = torch.Tensor(np.random.rand(self.num_envs)).to(self.device)
         frame_start = (
-            (frame_start * (self.gt_steps_visible - self.wdw_length))
-            .round()
-            .long()
+            (frame_start * (self.gt_steps_visible - self.wdw_length)).round().long()
         )
         return frame_start
 
@@ -607,8 +612,10 @@ class phys_model(nn.Module):
         target_q = rotate_frame(self.global_q, target_q)
         target_qd = rotate_frame_vel(self.global_q, target_qd)
 
-        target_body_q, target_body_qd, msm = self.combine_targets(target_q, target_ja, target_qd, target_jad)
-        
+        target_body_q, target_body_qd, msm = self.combine_targets(
+            target_q, target_ja, target_qd, target_jad
+        )
+
         # combine preds
         (
             torques,
@@ -624,7 +631,17 @@ class phys_model(nn.Module):
         est_ja = target_ja + delta_ja_est
         ref_ja = target_ja + delta_ja_ref
 
-        return target_body_q, target_body_qd, msm, ref_ja, est_q, est_ja, state_qd, torques, res_f
+        return (
+            target_body_q,
+            target_body_qd,
+            msm,
+            ref_ja,
+            est_q,
+            est_ja,
+            state_qd,
+            torques,
+            res_f,
+        )
 
     def forward(self, frame_start=None):
         # capture requires cuda memory to be pre-allocated
@@ -647,11 +664,19 @@ class phys_model(nn.Module):
         )
         outseq_idx = (vidid[:, :1] - vidid) != 0
 
-
         # compute target pos/vel
         beg = time.time()
-        target_body_q, target_body_qd, self.msm, ref_ja, est_q, est_ja, state_qd, torques, res_f = \
-            self.get_batch_input(steps_fr)
+        (
+            target_body_q,
+            target_body_qd,
+            self.msm,
+            ref_ja,
+            est_q,
+            est_ja,
+            state_qd,
+            torques,
+            res_f,
+        ) = self.get_batch_input(steps_fr)
 
         ref, state_q, state_qd, torques, res_f = self.rearrange_pred(
             est_q, est_ja, ref_ja, state_qd, torques, res_f
@@ -771,7 +796,7 @@ class phys_model(nn.Module):
 
         # delta_joint_ref_reg = delta_ja_ref.pow(2).mean()
         # total_loss += delta_joint_ref_reg*1e-4
-        
+
         foot_reg = foot_height.pow(2).mean()
         # total_loss += foot_reg * 1e-4
 
@@ -789,7 +814,6 @@ class phys_model(nn.Module):
                 self.total_loss_hist.append(total_loss.detach().cpu())
         else:
             self.total_loss_hist.append(total_loss.detach().cpu())
-
 
         loss_dict = {}
         loss_dict["total_loss"] = total_loss
@@ -1137,14 +1161,18 @@ class ForwardWarp(torch.autograd.Function):
         else:
             refs_grad = None
 
-        torques_grad = [wp.to_torch(ctx.tape.gradients[i]) for i in ctx.torques]
+        torques_grad = [
+            wp.to_torch(ctx.tape.gradients[i]) for i in ctx.torques if i.requires_grad
+        ]
         if len(torques_grad) > 0:
             torques_grad = torch.stack(torques_grad, 0).clone()
             remove_nan(torques_grad, self.num_envs)
         else:
             torques_grad = None
 
-        res_f_grad = [wp.to_torch(ctx.tape.gradients[i]) for i in ctx.res_f]
+        res_f_grad = [
+            wp.to_torch(ctx.tape.gradients[i]) for i in ctx.res_f if i.requires_grad
+        ]
         if len(res_f_grad) > 0:
             res_f_grad = torch.stack(res_f_grad, 0).clone()
             remove_nan(res_f_grad, self.num_envs)
@@ -1178,5 +1206,3 @@ class ForwardWarp(torch.autograd.Function):
             body_mass_grad,
             None,
         )
-
-
