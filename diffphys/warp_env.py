@@ -1,5 +1,4 @@
 import os, sys
-import copy
 import time
 import torch
 import torch.nn as nn
@@ -8,285 +7,26 @@ import pdb
 import numpy as np
 import scipy.interpolate
 from scipy.spatial.transform import Rotation as R
-import dqtorch
 
 from diffphys.dataloader import parse_amp
 from diffphys.torch_utils import NeRF
 from diffphys.robot import URDFRobot
 from diffphys.urdf_utils import (
-    articulate_robot_rbrt,
-    articulate_robot_rbrt_batch,
-    articulate_robot,
+    articulate_robot_rbrt_batch
 )
 from diffphys.geom_utils import (
     se3_vec2mat,
     se3_mat2vec,
-    rot_angle,
-    vec_to_sim3,
-    create_base_se3,
-    refine_rt,
     fid_reindex,
-    axis_angle_to_matrix,
-    quaternion_invert,
 )
-
 
 from warp.sim.articulation import eval_fk
 from diffphys.import_urdf import parse_urdf
 from diffphys.integrator_euler import SemiImplicitIntegrator
+from diffphys.dp_utils import rotate_frame, rotate_frame_vel, compute_com, clip_loss, se3_loss, can2gym2gl, remove_nan, bullet2gl
 
 import warp as wp
-
 wp.init()
-
-
-def zero_grad_list(paramlist):
-    """
-    Clears the gradients of all optimized :class:`torch.Tensor`
-    """
-    for p in paramlist:
-        if p.grad is not None:
-            p.grad.detach_()
-            p.grad.zero_()
-
-
-def rotate_frame(global_q, target_q):
-    """
-    global_q: 7
-    target_q: bs,t,7
-    """
-    # root states: T = Tg @ T_t, bs,T
-    global_qmat = se3_vec2mat(global_q)
-    if len(global_q.shape) == 1:
-        global_qmat = global_qmat[None, None]
-    target_qmat = se3_vec2mat(target_q)
-    target_qmat = global_qmat @ target_qmat
-    target_q = se3_mat2vec(target_qmat, outdim=target_q.shape[-1])
-    return target_q
-
-
-def rotate_frame_vel(global_q, target_qd):
-    # only rotate the first 3 elements
-    global_qd = global_q.clone()
-    global_qd[..., :3] = 0
-    target_qd_rev = torch.cat([target_qd[..., 3:], target_qd[..., :3]], -1)
-    rot = rotate_frame(global_qd, target_qd)[..., :3]
-    trn = rotate_frame(global_qd, target_qd_rev)[..., :3]
-    target_qd_rt = torch.cat([rot, trn], -1)
-    return target_qd_rt
-
-
-def state_to_msm(state_q, state_qd, foot_pos, in_bullet):
-    msm = {}
-    msm["pos"] = state_q[0:3].detach().cpu().numpy()
-    msm["orn"] = state_q[3:7].detach().cpu().numpy()
-    msm["vel"] = state_qd[0:3].detach().cpu().numpy()
-    msm["avel"] = state_qd[3:6].detach().cpu().numpy()
-    msm["jang"] = state_q[7:19].detach().cpu().numpy()
-    msm["jvel"] = state_qd[6:18].detach().cpu().numpy()
-    msm["kp"] = foot_pos.view(-1, 3).detach().cpu().numpy()
-    msm["kp_vel"] = msm["kp"] * 0
-    gl2bullet(msm, in_bullet)
-    msm["kp"] = msm["kp"].flatten()
-    msm["kp_vel"] = msm["kp_vel"].flatten()
-    return msm
-
-
-def compute_com(body_q, part_com, part_mass):
-    body_com = R.from_quat(body_q[:, 3:]).as_matrix() @ part_com
-    body_com = body_com[..., 0] + body_q[:, :3]
-    com = (body_com * part_mass[:, None]).sum(0) / part_mass.sum()
-    return com
-
-
-def clip_loss(loss_seq, th):
-    """
-    bs,T
-    """
-    # if th==0:
-    #    th=loss_seq.median()*10
-    # clip_val,clip_idx = torch.max(loss_seq>th,1)
-    for i in range(len(loss_seq)):
-        if th == 0:
-            loss_sub = loss_seq[i]
-            th = loss_sub[loss_sub > 0].median() * 10
-        clip_val, clip_idx = torch.max(loss_seq[i] > th, 0)
-        if clip_val == 1:
-            loss_seq[i, clip_idx:] = 0
-        # if clip_val[i]==1:
-        #    loss_seq[i,clip_idx[i]:] = 0
-    if loss_seq.sum() > 0:
-        loss_seq = loss_seq[loss_seq > 0].mean()
-    else:
-        loss_seq = loss_seq.mean()
-    return loss_seq
-
-
-def se3_loss(pred, gt, rot_ratio=0.1):
-    """
-    ...,7
-    """
-    # find nan values
-    nanid = torch.logical_or(pred.sum(-1).isnan(), gt.sum(-1).isnan())
-
-    trn_loss = (pred[..., :3] - gt[..., :3]).pow(2).sum(-1)
-
-    rot_pred = pred[..., 3:]
-    rot_gt = gt[..., 3:]
-    if rot_pred.shape[-1] == 3:
-        rot_pred = axis_angle_to_matrix(rot_pred)
-        rot_gt = axis_angle_to_matrix(rot_gt)
-        rot_gti = rot_gt.inverse()
-    elif rot_pred.shape[-1] == 4:
-        rot_pred = dqtorch.quaternion_to_matrix(
-            rot_pred[..., [3, 0, 1, 2]]
-        )  # xyzw => wxyz
-        rot_gti = quaternion_invert(rot_gt[..., [3, 0, 1, 2]])
-        rot_gti = dqtorch.quaternion_to_matrix(rot_gti)
-    rot_loss = rot_angle(rot_pred @ rot_gti)
-
-    # loss = trn_loss
-    loss = 0.1 * trn_loss + 0.1 * rot_loss * rot_ratio
-    # loss = 0.1*trn_loss + 0.01*rot_loss
-    # loss = trn_loss + 0.01*rot_loss
-    loss[nanid] = 0
-    return loss
-
-
-def gl2bullet(msm, in_bullet):
-    ndim = msm["pos"].ndim - 1
-    gl_to_issac = np.asarray([[0, 0, 1], [1, 0, 0], [0, 1, 0]]).reshape(
-        ndim * (1,) + (3, 3)
-    )
-    msm["pos"] = (gl_to_issac @ msm["pos"][..., None])[..., 0]
-    if in_bullet:
-        shape = msm["orn"].shape[:-1]
-        orn = R.from_quat(msm["orn"].reshape((-1, 4))).as_matrix()  # N,3,3
-        msm["orn"] = R.from_matrix(orn @ gl_to_issac.reshape((-1, 3, 3))).as_quat()
-        msm["orn"] = msm["orn"].reshape(shape + (4,))
-    msm["orn"][..., :3] = (gl_to_issac @ msm["orn"][..., :3, None])[..., 0]  # xyzw
-
-    msm["vel"] = (gl_to_issac @ msm["vel"][..., None])[..., 0]
-    msm["avel"] = (gl_to_issac @ msm["avel"][..., None])[..., 0]
-    if "kp" in msm.keys():
-        msm["kp"] = (gl_to_issac @ msm["kp"][..., None])[..., 0]
-        msm["kp_vel"] = (gl_to_issac @ msm["kp_vel"][..., None])[..., 0]
-
-
-def bullet2gl(msm, in_bullet):
-    # in_bullet: convert the rest mesh as well (for those in bullet)
-    ndim = msm["pos"].ndim - 1
-    issac_to_gl = np.asarray([[0, 1, 0], [0, 0, 1], [1, 0, 0]]).reshape(
-        ndim * (1,) + (3, 3)
-    )
-    msm["pos"] = (issac_to_gl @ msm["pos"][..., None])[..., 0]
-    if in_bullet:
-        shape = msm["orn"].shape[:-1]
-        orn = R.from_quat(msm["orn"].reshape((-1, 4))).as_matrix()  # N,3,3
-        msm["orn"] = R.from_matrix(orn @ issac_to_gl.reshape((-1, 3, 3))).as_quat()
-        msm["orn"] = msm["orn"].reshape(shape + (4,))
-    msm["orn"][..., :3] = (issac_to_gl @ msm["orn"][..., :3, None])[..., 0]  # xyzw
-
-    msm["vel"] = (issac_to_gl @ msm["vel"][..., None])[..., 0]
-    msm["avel"] = (issac_to_gl @ msm["avel"][..., None])[..., 0]
-
-
-def pred_est_q(steps_fr, obj_field, bg_field):
-    """
-    bs,T
-    robot2world = scale(bg2world @ bg2view^-1 @ root2view @ se3)
-    """
-    bs, n_fr = steps_fr.shape
-    data_offset = bg_field.camera_mlp.time_embedding.frame_offset
-    vidid, _ = fid_reindex(steps_fr, len(data_offset) - 1, data_offset)
-    vidid = vidid.long()
-
-    obj_to_view = obj_field.get_camera(frame_id=steps_fr.reshape(-1).long())
-    scene_to_view = bg_field.get_camera(frame_id=steps_fr.reshape(-1).long())  # -1,3,4
-    obj_to_scene = scene_to_view.inverse() @ obj_to_view
-    # scene_to_world = bg_field.get_rectirication_se3()
-    # obj_to_world = scene_to_world @ obj_to_scene
-    obj_to_world = obj_to_scene
-
-    # cv to gl coords
-    cv2gl = torch.eye(4).to(obj_to_world.device)
-    cv2gl[1, 1] = -1
-    cv2gl[2, 2] = -1
-    obj_to_world = cv2gl[None] @ obj_to_world
-
-    obj_to_world_vec = se3_mat2vec(obj_to_world)  # xyzw
-    obj_to_world_vec = obj_to_world_vec.view(bs, n_fr, -1)
-
-    obj_to_view = obj_to_view.clone().view(bs, n_fr, 4, 4)
-    return obj_to_world_vec, obj_to_view
-
-
-def pred_est_ja(steps_fr, nerf_body_rts, env, robot):
-    """
-    bs,T
-    """
-    bs, n_fr = steps_fr.shape
-    data_offset = nerf_body_rts.time_embedding.frame_offset
-    vidid, _ = fid_reindex(steps_fr, len(data_offset) - 1, data_offset)
-    vidid = vidid.long()
-
-    # pred joint angles
-    pred_joints = nerf_body_rts.get_vals(steps_fr.reshape(-1).long(), return_so3=True)
-    pred_joints = pred_joints.view(bs, n_fr, -1)
-
-    # update joint locations
-    joint_origin = nerf_body_rts.rest_joints[None].repeat(bs, 1, 1)
-    zero_ones = torch.zeros((bs, nerf_body_rts.num_se3, 4), device=joint_origin.device)
-    zero_ones[..., -1] = 1  # xyzw
-    joint_origin = torch.cat([joint_origin, zero_ones], -1)
-
-    # set first joitn to identity
-    zero_ones = torch.zeros_like(joint_origin[:, :1])
-    zero_ones[:, 0, -1] = 1
-    joint_origin = torch.cat([zero_ones, joint_origin], 1)
-    joint_origin = joint_origin.view(-1, 7)
-    env.joint_X_p = wp.from_torch(joint_origin, dtype=wp.transform)
-    return pred_joints
-
-
-class WarpRootMLP(nn.Module):
-    def __init__(self, banmo_root_mlp, banmo_body_mlp, banmo_bg_mlp):
-        super(WarpRootMLP, self).__init__()
-        self.root_mlp = copy.deepcopy(banmo_root_mlp)
-        # self.body_mlp = copy.deepcopy(banmo_body_mlp)
-        self.body_mlp = banmo_body_mlp.mlp
-        self.bg_mlp = copy.deepcopy(banmo_bg_mlp)
-        # self.bg_mlp.ft_bgcam=True # asssuming it's accurate enough
-
-    def forward(self, x):
-        out, _ = pred_est_q(x, self.root_mlp, self.bg_mlp)
-        return out
-
-    def override_states(self, banmo_root_mlp, banmo_bg_mlp):
-        self.root_mlp.load_state_dict(banmo_root_mlp.state_dict())
-        # self.body_mlp.load_state_dict(banmo_body_mlp.state_dict())
-        self.bg_mlp.load_state_dict(banmo_bg_mlp.state_dict())
-
-    def override_states_inv(self, banmo_root_mlp, banmo_bg_mlp):
-        banmo_root_mlp.load_state_dict(self.root_mlp.state_dict())
-        # banmo_body_mlp.load_state_dict(self.body_mlp.state_dict())
-        banmo_bg_mlp.load_state_dict(self.bg_mlp.state_dict())
-
-
-class WarpBodyMLP(nn.Module):
-    def __init__(self, banmo_mlp):
-        super(WarpBodyMLP, self).__init__()
-        self.mlp = copy.deepcopy(banmo_mlp)
-
-    def forward(self, x):
-        out = self.mlp.get_vals(x.long(), return_so3=True)
-        return out
-
-    def override_states(self, banmo_mlp):
-        self.mlp.load_state_dict(banmo_mlp.state_dict())
-
-    def override_states_inv(self, banmo_mlp):
-        banmo_mlp.load_state_dict(self.mlp.state_dict())
 
 
 class phys_model(nn.Module):
@@ -547,31 +287,6 @@ class phys_model(nn.Module):
             steps_fr, self.obj_field.warp.articulation, self.env, self.robot
         )
         return out
-
-    def warmup_state_estimate(self):
-        # warmup mlp for reference trajectories
-        for it in range(1000):
-            # for it in range(10):
-            # get a batch of clips
-            steps_fr = torch.cuda.LongTensor(range(self.gt_steps))[None]  # frames
-            target_q, target_ja, _, _ = self.get_batch_input(
-                self.amp_info_func, steps_fr, self.in_bullet
-            )
-            # inference
-            pred_q = self.pred_est_q(steps_fr)
-            pred_joints = self.pred_est_ja(steps_fr)
-
-            # compare with gts
-            loss_joints = (target_ja - pred_joints).pow(2).mean()
-            loss_q = se3_loss(target_q, pred_q).mean()
-
-            total_loss = loss_joints + loss_q
-
-            # train
-            self.backward([total_loss])
-            grad_list = self.update()
-            if it % 100 == 0:
-                print("step: %s/loss: %.4f" % (it, total_loss))
 
     def set_progress(self, num_iters):
         self.progress = num_iters / self.total_iters
@@ -1321,36 +1036,6 @@ class phys_model(nn.Module):
         self.load_state_dict(states, strict=False)
 
 
-def fk_no_grad(rj_q, rj_qd, self):
-    """
-    rj_q:  bs, T, 7+B
-    rj_qd: bs, T, 6+B / none
-    """
-    bs, nfr, ndof = rj_q.shape
-
-    body_q = []
-    body_qd = []
-    for it in range(nfr):
-        rj_q_sub = rj_q[..., it, :].reshape(-1)
-        rj_q_sub = wp.from_torch(rj_q_sub)
-        if rj_qd is None:
-            rj_qd_sub = torch.cuda.FloatTensor(np.zeros(bs * (ndof - 1)))
-        else:
-            rj_qd_sub = rj_qd[..., it, :]
-        rj_qd_sub = wp.from_torch(rj_qd_sub.reshape(-1))
-        eval_fk(self.env, rj_q_sub, rj_qd_sub, None, self.state_steps[0])  #
-        body_q_sub = wp.to_torch(self.state_steps[0].body_q).clone()  # bs*-1,7
-        body_q_sub = body_q_sub.reshape(bs, -1, 7)
-        body_q.append(body_q_sub)
-
-        body_qd_sub = wp.to_torch(self.state_steps[0].body_qd).clone()  # bs*-1,6
-        body_qd_sub = body_qd_sub.reshape(bs, -1, 6)
-        body_qd.append(body_qd_sub)
-    body_q = torch.stack(body_q, 1)  # bs,T,dofs,7
-    body_qd = torch.stack(body_qd, 1)
-    return body_q, body_qd
-
-
 class ForwardKinematics(torch.autograd.Function):
     @staticmethod
     def forward(ctx, rj_q, rj_qd, self):
@@ -1465,24 +1150,6 @@ class ForwardKinematics(torch.autograd.Function):
             pdb.set_trace()
         ctx.tape.zero()
         return (rj_q_grad, rj_qd_grad, None)
-
-
-def remove_nan(q_init_grad, bs):
-    """
-    q_init_grad: bs*xxx
-    """
-    # original_shape = q_init_grad.shape
-    # q_init_grad = q_init_grad.view(bs,-1)
-    # invalid_batch = q_init_grad.isnan().sum(1).bool()
-    # q_init_grad[invalid_batch] = 0
-    # q_init_grad = q_init_grad.reshape(original_shape)
-    # clip grad
-    q_init_grad[q_init_grad.isnan()] = 0
-    clip_th = 0.01
-    q_init_grad[q_init_grad > clip_th] = clip_th
-    q_init_grad[q_init_grad < -clip_th] = -clip_th
-    if q_init_grad.isnan().sum() > 0:
-        pdb.set_trace()
 
 
 class ForwardWarp(torch.autograd.Function):
@@ -1675,40 +1342,3 @@ class ForwardWarp(torch.autograd.Function):
         )
 
 
-def can2gym2gl(
-    x_rest, obs, gforce=None, com=None, in_bullet=False, use_urdf=False, use_angle=False
-):
-    if use_urdf:
-        if use_angle:
-            cfg = np.asarray(obs["jang"])
-            mesh = articulate_robot(x_rest, cfg=cfg, use_collision=True)
-            rmat = R.from_quat(obs["orn"]).as_matrix()  # xyzw
-            tmat = np.asarray(obs["pos"])
-            mesh.vertices = mesh.vertices @ rmat.T + tmat[None]
-        else:
-            # need to parse sperical joints => assuming it's going over joints
-            mesh = articulate_robot_rbrt(x_rest, obs, gforce=gforce, com=com)
-    else:
-        mesh = x_rest.copy()
-    return mesh
-
-
-def bullet_can2gym2gl(x_rest, obs, in_bullet=False, use_urdf=False):
-    rmat = R.from_quat(obs["orn"]).as_matrix()  # xyzw
-    tmat = np.asarray(obs["pos"])
-    cfg = np.asarray(obs["jang"])
-
-    gl_to_issac = np.asarray([[0, 0, 1], [1, 0, 0], [0, 1, 0]])
-    issac_to_gl = np.asarray([[0, 1, 0], [0, 0, 1], [1, 0, 0]])
-    if use_urdf:
-        mesh = articulate_robot(x_rest, cfg=cfg, use_collision=True)
-    else:
-        mesh = x_rest.copy()
-    if not in_bullet:
-        # transform to bullet
-        mesh.vertices = mesh.vertices @ gl_to_issac.T
-    # transform in bullet
-    mesh.vertices = mesh.vertices @ rmat.T + tmat[None]
-    # transform back
-    mesh.vertices = mesh.vertices @ issac_to_gl.T
-    return mesh
