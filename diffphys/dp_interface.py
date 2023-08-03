@@ -1,8 +1,10 @@
+import pdb
 import copy
 import torch
 import warp as wp
 import numpy as np
 import torch.nn as nn
+import dqtorch
 
 from diffphys.dp_model import phys_model
 from diffphys.geom_utils import fid_reindex, se3_mat2vec
@@ -197,9 +199,10 @@ def pred_est_q(steps_fr, obj_field, bg_field):
     obj_to_view = obj_field.get_camera(frame_id=steps_fr.reshape(-1).long())
     scene_to_view = bg_field.get_camera(frame_id=steps_fr.reshape(-1).long())  # -1,3,4
     obj_to_scene = scene_to_view.inverse() @ obj_to_view
-    # scene_to_world = bg_field.get_rectirication_se3()
-    # obj_to_world = scene_to_world @ obj_to_scene
-    obj_to_world = obj_to_scene
+
+    # scene rectification
+    scene_to_world = bg_field.get_field2world(inst_id=vidid.reshape(-1))
+    obj_to_world = scene_to_world @ obj_to_scene
 
     # cv to gl coords
     cv2gl = torch.eye(4).to(obj_to_world.device)
