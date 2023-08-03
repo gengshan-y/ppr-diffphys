@@ -61,17 +61,17 @@ class phys_model(nn.Module):
             kd = 2.0
             shape_ke = 1.0e4
             shape_kd = 0
-        elif opts["urdf_template"] == "wolf":
-            urdf_path = "%s/data/urdf_templates/wolf.urdf" % data_dir
+        elif opts["urdf_template"] == "laikago":
+            urdf_path = "%s/data/urdf_templates/laikago/laikago.urdf" % data_dir
             in_bullet = False
-            self.joint_attach_ke = 32000.0
-            self.joint_attach_kd = 100.0
-            kp = 2200.0
+            self.joint_attach_ke = 16000.0
+            self.joint_attach_kd = 200.0
+            kp = 220.0
             kd = 2.0
-            shape_ke = 1000
-            shape_kd = 100
-        elif opts["urdf_template"] == "wolf_mod":
-            urdf_path = "%s/data/urdf_templates/wolf_mod.urdf" % data_dir
+            shape_ke = 1.0e4
+            shape_kd = 0
+        elif opts["urdf_template"] == "quad":
+            urdf_path = "%s/data/urdf_templates/quad.urdf" % data_dir
             in_bullet = False
             self.joint_attach_ke = 8000.0
             self.joint_attach_kd = 200.0
@@ -83,26 +83,8 @@ class phys_model(nn.Module):
             # self.joint_attach_kd = 100.
             # kp=220.
             # kd=2.
-        elif opts["urdf_template"] == "laikago":
-            urdf_path = "%s/data/urdf_templates/laikago/laikago.urdf" % data_dir
-            in_bullet = False
-            self.joint_attach_ke = 16000.0
-            self.joint_attach_kd = 200.0
-            kp = 220.0
-            kd = 2.0
-            shape_ke = 1.0e4
-            shape_kd = 0
         elif opts["urdf_template"] == "human":
             urdf_path = "%s/data/urdf_templates/human.urdf" % data_dir
-            in_bullet = False
-            self.joint_attach_ke = 64000.0
-            self.joint_attach_kd = 150.0  # tune this such that it would not blow up
-            kp = 20.0
-            kd = 2.0
-            shape_ke = 1000
-            shape_kd = 100
-        elif opts["urdf_template"] == "human_mod":
-            urdf_path = "%s/data/urdf_templates/human_mod.urdf" % data_dir
             in_bullet = False
             self.joint_attach_ke = 8000.0
             self.joint_attach_kd = 200.0
@@ -112,13 +94,8 @@ class phys_model(nn.Module):
             shape_kd = 100
             # kp=20.
             # kd=2.
-        elif opts["urdf_template"] == "human_amp":
-            urdf_path = "%s/data/urdf_templates/human_amp.urdf" % data_dir
-            in_bullet = False
-            kp = 20.0
-            kd = 2.0
-            shape_ke = 1000
-            shape_kd = 100
+        else:
+            raise NotImplementedError
         self.in_bullet = in_bullet
         self.robot = URDFRobot(urdf_path=urdf_path)
 

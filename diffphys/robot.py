@@ -12,13 +12,7 @@ class URDFRobot(nn.Module):
         self.urdf = URDF.load(urdf_path)
         robot_name = urdf_path.split("/")[-1][:-5]
         self.urdf.robot_name = robot_name
-        if (
-            robot_name == "wolf"
-            or robot_name == "human"
-            or robot_name == "human_amp"
-            or robot_name == "wolf_mod"
-            or robot_name == "human_mod"
-        ):
+        if robot_name == "human" or robot_name == "quad":
             self.urdf.ball_joint = True  # whether has sperical joints
         else:
             self.urdf.ball_joint = False
@@ -58,19 +52,7 @@ class URDFRobot(nn.Module):
             rest_angles[0, 5] = -0.8
             rest_angles[0, 8] = -0.8
             rest_angles[0, 11] = -0.8
-        elif robot_name == "wolf":
-            sim3 = torch.Tensor(
-                [0, 0.02, -0.02, 0.5, 0.6, 0, 0, -2.2, -2.2, -2.2]
-            )  # center, orient, scale
-            self.num_dofs = joints.shape[0] * 3
-            rest_angles = torch.zeros(1, self.num_dofs)  # ball joints
-            self.urdf.kp_links = [
-                "link_155_Vorderpfote_R_Y",
-                "link_150_Vorderpfote_L_Y",
-                "link_170_Pfote2_R_Y",
-                "link_165_Pfote2_L_Y",
-            ]
-        elif robot_name == "wolf_mod":
+        elif robot_name == "quad":
             sim3 = torch.Tensor(
                 [0, 0.01, -0.04, 0.5, 0.6, 0, 0, -3.1, -3.1, -3.1]
             )  # center, orient, scale
@@ -90,16 +72,6 @@ class URDFRobot(nn.Module):
             ]
         elif robot_name == "human":
             sim3 = torch.Tensor(
-                [0, 0, 0, 1, 0, 0, 0, -2.5, -2.5, -2.5]
-            )  # center, orient, scale
-            self.num_dofs = joints.shape[0] * 3
-            rest_angles = torch.zeros(1, self.num_dofs)  # ball joints
-            self.urdf.kp_links = [
-                "link_24_mixamorig:RightFoot_Y",
-                "link_19_mixamorig:LeftFoot_Y",
-            ]
-        elif robot_name == "human_mod":
-            sim3 = torch.Tensor(
                 [0, 0, 0, 1, 0, 0, 0, -3.2, -3.2, -3.2]
             )  # center, orient, scale
             self.num_dofs = joints.shape[0] * 3
@@ -114,12 +86,8 @@ class URDFRobot(nn.Module):
                 "link_16_mixamorig:RightHand_Y",
                 "link_12_mixamorig:LeftHand_Y",
             ]
-        elif robot_name == "human_amp":
-            sim3 = torch.Tensor(
-                [0, 0, 0, 1, 0, 0, 0, -2.5, -2.5, -2.5]
-            )  # center, orient, scale
-            self.num_dofs = joints.shape[0] * 3
-            rest_angles = torch.zeros(1, self.num_dofs)  # ball joints
+        else:
+            raise NotImplementedError
 
         # self.sim3 = sim3# [:8] # 10 => 8
         self.sim3 = sim3[:8]  # 10 => 8
@@ -136,7 +104,7 @@ class URDFRobot(nn.Module):
         # assign symmetric index
         if self.urdf.robot_name == "a1" or self.urdf.robot_name == "laikago":
             symm_idx = [3, 4, 5, 0, 1, 2, 9, 10, 11, 6, 7, 8]
-        elif self.urdf.robot_name == "wolf" or self.urdf.robot_name == "wolf_mod":
+        elif self.urdf.robot_name == "quad":
             symm_idx = [
                 0,
                 1,
@@ -164,6 +132,6 @@ class URDFRobot(nn.Module):
                 19,
                 20,
             ]
-        elif self.urdf.robot_name == "human" or self.urdf.robot_name == "human_mod":
+        elif self.urdf.robot_name == "human":
             symm_idx = [0, 1, 2, 3, 8, 9, 10, 11, 4, 5, 6, 7, 15, 16, 17, 12, 13, 14]
         self.urdf.symm_idx = symm_idx
