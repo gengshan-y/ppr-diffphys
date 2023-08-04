@@ -219,7 +219,7 @@ def render_extra(renderer, mesh, camera):
     )
     plane_transform = np.eye(4)
     plane_transform[1, 1] = -1
-    floor = trimesh.primitives.Box(extents=[10, 0, 10], transform=plane_transform)
+    floor = trimesh.primitives.Box(extents=[20, 0, 20], transform=plane_transform)
     floor.visual.vertex_colors[:, :3] = 192
     mesh = trimesh.util.concatenate([mesh, floor])
 

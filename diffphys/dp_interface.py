@@ -23,29 +23,19 @@ class phys_interface(phys_model):
         super().add_nn_modules()
         self.delta_joint_est_mlp = WarpBodyMLP(self.obj_field.warp.articulation)
         self.delta_root_mlp = WarpRootMLP(
-            self.obj_field, self.delta_joint_est_mlp, self.bg_field
+            self.obj_field, self.delta_joint_est_mlp, self.scene_field
         )
 
     def reinit_envs(self, num_envs, wdw_length, is_eval=False, overwrite=False):
         super().reinit_envs(num_envs, wdw_length, is_eval, overwrite)
         self.env.gravity[1] = -5.0
 
-    def pred_est_q(self, steps_fr):
-        out, obj2view = pred_est_q(steps_fr, self.obj_field, self.bg_field)
-        return out, obj2view
-
-    def pred_est_ja(self, steps_fr):
-        out = pred_est_ja(
-            steps_fr, self.obj_field.warp.articulation, self.env, self.robot
-        )
-        return out
-
     def preset_data(self, model_dict):
-        self.bg_field = model_dict["bg_field"]
+        self.scene_field = model_dict["scene_field"]
         self.obj_field = model_dict["obj_field"]
         self.intrinsics = model_dict["intrinsics"]
 
-        self.data_offset = self.bg_field.camera_mlp.time_embedding.frame_offset
+        self.data_offset = self.scene_field.camera_mlp.time_embedding.frame_offset
         self.samp_int = 0.1
         self.gt_steps = self.data_offset[-1] - 1
         self.gt_steps_visible = self.gt_steps
@@ -55,8 +45,12 @@ class phys_interface(phys_model):
     def sample_sys_state(self, steps_fr):
         bs, n_fr = steps_fr.shape
         batch = {}
-        batch["target_q"], batch["obj2view"] = self.pred_est_q(steps_fr)
-        batch["target_ja"] = self.pred_est_ja(steps_fr)
+        batch["target_q"], batch["obj2view"] = pred_est_q(
+            steps_fr, self.obj_field, self.scene_field
+        )
+        batch["target_ja"] = pred_est_ja(
+            steps_fr, self.obj_field.warp.articulation, self.env, self.robot
+        )
         # TODO this is problematic due to the discrete root pose
         # batch['target_qd'] = self.compute_gradient(self.pred_est_q,  steps_fr.clone()) / self.samp_int
         # batch['target_jad']= self.compute_gradient(self.pred_est_ja, steps_fr.clone()) / self.samp_int
@@ -68,12 +62,11 @@ class phys_interface(phys_model):
         return batch
 
     def override_states(self):
-        self.delta_root_mlp.override_states(self.obj_field, self.bg_field)
+        self.delta_root_mlp.override_states(self.obj_field, self.scene_field)
         self.delta_joint_est_mlp.override_states(self.obj_field.warp.articulation)
-        # self.delta_joint_ref_mlp.override_states(self.nerf_body_rts)
 
     def override_states_inv(self):
-        self.delta_root_mlp.override_states_inv(self.obj_field, self.bg_field)
+        self.delta_root_mlp.override_states_inv(self.obj_field, self.scene_field)
         self.delta_joint_est_mlp.override_states_inv(self.obj_field.warp.articulation)
 
     def compute_frame_start(self):
@@ -147,27 +140,25 @@ class phys_interface(phys_model):
 
 
 class WarpRootMLP(nn.Module):
-    def __init__(self, banmo_root_mlp, banmo_body_mlp, banmo_bg_mlp):
+    def __init__(self, object_field, banmo_body_mlp, scene_field):
         super(WarpRootMLP, self).__init__()
-        self.root_mlp = copy.deepcopy(banmo_root_mlp)
+        self.object_field = copy.deepcopy(object_field)
         # self.body_mlp = copy.deepcopy(banmo_body_mlp)
-        self.body_mlp = banmo_body_mlp.mlp
-        self.bg_mlp = copy.deepcopy(banmo_bg_mlp)
-        # self.bg_mlp.ft_bgcam=True # asssuming it's accurate enough
+        self.scene_field = copy.deepcopy(scene_field)
 
     def forward(self, x):
-        out, _ = pred_est_q(x, self.root_mlp, self.bg_mlp)
+        out, _ = pred_est_q(x, self.object_field, self.scene_field)
         return out
 
-    def override_states(self, banmo_root_mlp, banmo_bg_mlp):
-        self.root_mlp.load_state_dict(banmo_root_mlp.state_dict())
+    def override_states(self, object_field, scene_field):
+        self.object_field.load_state_dict(object_field.state_dict())
         # self.body_mlp.load_state_dict(banmo_body_mlp.state_dict())
-        self.bg_mlp.load_state_dict(banmo_bg_mlp.state_dict())
+        self.scene_field.load_state_dict(scene_field.state_dict())
 
-    def override_states_inv(self, banmo_root_mlp, banmo_bg_mlp):
-        banmo_root_mlp.load_state_dict(self.root_mlp.state_dict())
+    def override_states_inv(self, object_field, scene_field):
+        object_field.load_state_dict(self.object_field.state_dict())
         # banmo_body_mlp.load_state_dict(self.body_mlp.state_dict())
-        banmo_bg_mlp.load_state_dict(self.bg_mlp.state_dict())
+        scene_field.load_state_dict(self.scene_field.state_dict())
 
 
 class WarpBodyMLP(nn.Module):
@@ -186,35 +177,55 @@ class WarpBodyMLP(nn.Module):
         banmo_mlp.load_state_dict(self.mlp.state_dict())
 
 
-def pred_est_q(steps_fr, obj_field, bg_field):
+def pred_est_q(steps_fr, obj_field, scene_field):
     """
     bs,T
     robot2world = scale(bg2world @ bg2view^-1 @ root2view @ se3)
     """
     bs, n_fr = steps_fr.shape
-    data_offset = bg_field.camera_mlp.time_embedding.frame_offset
+    data_offset = scene_field.camera_mlp.time_embedding.frame_offset
     vidid, _ = fid_reindex(steps_fr, len(data_offset) - 1, data_offset)
     vidid = vidid.long()
 
+    # query obj/scene to view
     obj_to_view = obj_field.get_camera(frame_id=steps_fr.reshape(-1).long())
-    scene_to_view = bg_field.get_camera(frame_id=steps_fr.reshape(-1).long())  # -1,3,4
-    obj_to_scene = scene_to_view.inverse() @ obj_to_view
+    scene_to_view = scene_field.get_camera(frame_id=steps_fr.reshape(-1).long())
+
+    # urdf to object
+    orient = obj_field.warp.articulation.orient
+    orient = dqtorch.quaternion_to_matrix(orient)
+    shift = obj_field.warp.articulation.shift
+    urdf_to_object = torch.cat([orient, shift[..., None]], -1)
+    urdf_to_object = urdf_to_object.view(1, 3, 4)
+    urdf_to_object = torch.cat([urdf_to_object, obj_to_view[:1, -1:]], -2)
+
+    # urdf to view/scene
+    urdf_to_view = obj_to_view @ urdf_to_object
+    urdf_to_scene = scene_to_view.inverse() @ urdf_to_view
 
     # scene rectification
-    scene_to_world = bg_field.get_field2world(inst_id=vidid.reshape(-1))
-    obj_to_world = scene_to_world @ obj_to_scene
+    scene_to_world = scene_field.get_field2world(inst_id=vidid.reshape(-1))
+    urdf_to_world = scene_to_world @ urdf_to_scene
 
     # cv to gl coords
-    cv2gl = torch.eye(4).to(obj_to_world.device)
+    cv2gl = torch.eye(4, device=urdf_to_world.device)
     cv2gl[1, 1] = -1
     cv2gl[2, 2] = -1
-    obj_to_world = cv2gl[None] @ obj_to_world
+    urdf_to_world = cv2gl[None] @ urdf_to_world
 
-    obj_to_world_vec = se3_mat2vec(obj_to_world)  # xyzw
-    obj_to_world_vec = obj_to_world_vec.view(bs, n_fr, -1)
+    # scale: from object to urdf
+    urdf_scale = obj_field.logscale.exp() / obj_field.warp.articulation.logscale.exp()
+    urdf_to_world = urdf_to_world.clone()
+    urdf_to_world[..., :3, 3] *= urdf_scale
 
-    obj_to_view = obj_to_view.clone().view(bs, n_fr, 4, 4)
-    return obj_to_world_vec, obj_to_view
+    urdf_to_view = urdf_to_view.clone()
+    urdf_to_view[..., :3, 3] *= urdf_scale
+
+    # rearrange
+    urdf_to_world_vec = se3_mat2vec(urdf_to_world)  # xyzw
+    urdf_to_world_vec = urdf_to_world_vec.view(bs, n_fr, -1)
+    urdf_to_view = urdf_to_view.clone().view(bs, n_fr, 4, 4)
+    return urdf_to_world_vec, urdf_to_view
 
 
 def pred_est_ja(steps_fr, nerf_body_rts, env, robot):
@@ -222,7 +233,6 @@ def pred_est_ja(steps_fr, nerf_body_rts, env, robot):
     bs,T
     """
     bs, n_fr = steps_fr.shape
-    device = steps_fr.device
     data_offset = nerf_body_rts.time_embedding.frame_offset
     inst_id, _ = fid_reindex(steps_fr, len(data_offset) - 1, data_offset)
     inst_id = inst_id[:, 0].long()
@@ -231,17 +241,17 @@ def pred_est_ja(steps_fr, nerf_body_rts, env, robot):
     pred_joints = nerf_body_rts.get_vals(steps_fr.reshape(-1).long(), return_so3=True)
     pred_joints = pred_joints.view(bs, n_fr, -1)
 
-    # update joint locations
+    # update joint coordinates
     rel_rest_joints = nerf_body_rts.compute_rel_rest_joints(inst_id=inst_id)
-    rel_rest_joints *= 20  # TODO fix it
-    zero_ones = torch.zeros((bs, nerf_body_rts.num_se3, 4), device=device)
-    zero_ones[..., -1] = 1  # xyzw
-    rel_rest_joints = torch.cat([rel_rest_joints, zero_ones], -1)
+    rel_rest_joints = rel_rest_joints / nerf_body_rts.logscale.exp()
+    rel_rest_rmat = nerf_body_rts.local_rest_coord[None, :, :3, :3].repeat(bs, 1, 1, 1)
+    rel_rest_rvec = dqtorch.matrix_to_quaternion(rel_rest_rmat)
+    rel_rest_coords = torch.cat([rel_rest_joints, rel_rest_rvec[..., [1, 2, 3, 0]]], -1)
 
-    # set first joitn to identity
-    zero_ones = torch.zeros_like(rel_rest_joints[:, :1])
+    # set first joint to identity
+    zero_ones = torch.zeros_like(rel_rest_coords[:, :1])
     zero_ones[:, 0, -1] = 1
-    joint_X_p = torch.cat([zero_ones, rel_rest_joints], 1)
+    joint_X_p = torch.cat([zero_ones, rel_rest_coords], 1)
     joint_X_p = joint_X_p.view(-1, 7)
 
     # B+1, 7 coordinates of end effectors
