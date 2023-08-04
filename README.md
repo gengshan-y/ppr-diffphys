@@ -5,6 +5,7 @@
 `pip install git+https://github.com/MightyChaos/dqtorch`
 `pip install vedo==2022.2.3`
 `pip install warp==0.7.2`
+`pip install open3d==0.14.1`
 
 (0) use larger skeleton to avoid blowing up
 (1) new urdf parser to deal with sperical joints => no reduncant links => 2x time steps
