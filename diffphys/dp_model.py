@@ -194,7 +194,6 @@ class phys_model(nn.Module):
 
         # optimizer
         self.add_optimizer(opts)
-        self.total_loss_hist = []
 
         # other hypoter parameters
         self.th_multip = 0  # seems to cause problems
@@ -389,8 +388,12 @@ class phys_model(nn.Module):
                 if name.startswith(params_name):
                     params_list.append({"params": p})
                     lr_list.append(lr)
+                    name_found = True
                     if get_local_rank() == 0:
                         print(name, p.shape, lr)
+            if name_found is False:
+                if get_local_rank() == 0:
+                    print(name, "not found")
 
         self.optimizer = torch.optim.AdamW(params_list, lr=opts["learning_rate"])
         # self.optimizer = torch.optim.SGD(
@@ -401,20 +404,12 @@ class phys_model(nn.Module):
             self.optimizer,
             lr_list,
             self.total_iters,
-            pct_start=0.02,  # use 2%
+            pct_start=0.02,  # use 2% iters
             cycle_momentum=False,
             anneal_strategy="linear",
             final_div_factor=1.0 / 5,
             div_factor=25,
         )
-        # self.scheduler = torch.optim.lr_scheduler.OneCycleLR(self.optimizer,\
-        # list(lr_dict.values()),
-        # int(1e6), # 1000k steps
-        # pct_start=0.02, # use 2%
-        # cycle_momentum=False,
-        # anneal_strategy='linear',
-        # final_div_factor=1., div_factor = 1.,
-        # )
 
     def update(self):
         self.optimizer.step()
@@ -763,15 +758,6 @@ class phys_model(nn.Module):
 
         # loss
         print("loss: %.4f / fw time: %.2f s" % (total_loss.cpu(), time.time() - beg))
-        if len(self.total_loss_hist) > 0:
-            his_med = torch.stack(self.total_loss_hist, 0).median()
-            print(his_med)
-            if total_loss > his_med * 10:
-                total_loss.zero_()
-            else:
-                self.total_loss_hist.append(total_loss.detach().cpu())
-        else:
-            self.total_loss_hist.append(total_loss.detach().cpu())
 
         loss_dict = {}
         loss_dict["total_loss"] = total_loss
@@ -1095,8 +1081,10 @@ class ForwardWarp(torch.autograd.Function):
         ctx.tape.backward()
 
         grad = [wp.to_torch(v) for k, v in ctx.tape.gradients.items()]
-        print("max grad:")
-        print(torch.cat([i.reshape(-1) for i in grad]).abs().max())
+        max_grad = torch.cat([i.reshape(-1) for i in grad]).abs().max()
+        print("max grad:", max_grad)
+        if max_grad == 0:
+            pdb.set_trace()
 
         if ctx.q_init.requires_grad:
             q_init_grad = wp.to_torch(ctx.tape.gradients[ctx.q_init]).clone()
