@@ -67,13 +67,11 @@ def main(_):
             loss += loss_dict["total_loss"]
         loss = loss / float(opts["accu_steps"])
         model.backward(loss)
-        grad_list = model.update()
+        model.update()
         print(it)
         log_data = loss_dict
         log_data["iter_time"] = time.time() - t
         log_data["loss"] = loss
-        for k, v in grad_list.items():
-            log_data[k] = v
         vis.write_log(log_data, it)
 
 

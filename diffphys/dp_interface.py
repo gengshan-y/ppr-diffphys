@@ -21,10 +21,34 @@ class phys_interface(phys_model):
 
     def add_nn_modules(self):
         super().add_nn_modules()
-        self.delta_joint_est_mlp = WarpBodyMLP(self.obj_field.warp.articulation)
-        self.delta_root_mlp = WarpRootMLP(
-            self.obj_field, self.delta_joint_est_mlp, self.scene_field
+        self.kinemtics_proxy = KinemticsProxy(self.object_field, self.scene_field)
+        del self.delta_root_mlp
+        del self.delta_joint_est_mlp
+        self.delta_root_mlp = lambda x: self.kinemtics_proxy(x)
+        self.delta_joint_est_mlp = (
+            lambda x: self.kinemtics_proxy.object_field.warp.articulation.get_vals(
+                x.long(), return_so3=True
+            )
         )
+
+    def get_lr_dict(self):
+        """Return the learning rate for each category of trainable parameters
+
+        Returns:
+            param_lr_startwith (Dict(str, float)): Learning rate for base model
+            param_lr_with (Dict(str, float)): Learning rate for explicit params
+        """
+        # define a dict for (tensor_name, learning) pair
+        opts = self.opts
+        lr_base = opts["learning_rate"]
+
+        param_lr_startwith, param_lr_with = super().get_lr_dict()
+        param_lr_startwith.update(
+            {
+                "kinemtics_proxy": lr_base,
+            }
+        )
+        return param_lr_startwith, param_lr_with
 
     def reinit_envs(self, num_envs, wdw_length, is_eval=False, overwrite=False):
         super().reinit_envs(num_envs, wdw_length, is_eval, overwrite)
@@ -32,7 +56,7 @@ class phys_interface(phys_model):
 
     def preset_data(self, model_dict):
         self.scene_field = model_dict["scene_field"]
-        self.obj_field = model_dict["obj_field"]
+        self.object_field = model_dict["object_field"]
         self.intrinsics = model_dict["intrinsics"]
 
         self.data_offset = self.scene_field.camera_mlp.time_embedding.frame_offset
@@ -42,14 +66,15 @@ class phys_interface(phys_model):
         self.max_steps = int(self.samp_int * self.gt_steps / self.dt)
         self.skip_factor = self.max_steps // self.gt_steps
 
-    def sample_sys_state(self, steps_fr):
+    @torch.no_grad()
+    def query_kinematics_proxy(self, steps_fr):
         bs, n_fr = steps_fr.shape
         batch = {}
         batch["target_q"], batch["obj2view"] = pred_est_q(
-            steps_fr, self.obj_field, self.scene_field
+            steps_fr, self.object_field, self.scene_field
         )
         batch["target_ja"] = pred_est_ja(
-            steps_fr, self.obj_field.warp.articulation, self.env, self.robot
+            steps_fr, self.object_field.warp.articulation, self.env, self.robot
         )
         # TODO this is problematic due to the discrete root pose
         # batch['target_qd'] = self.compute_gradient(self.pred_est_q,  steps_fr.clone()) / self.samp_int
@@ -62,12 +87,10 @@ class phys_interface(phys_model):
         return batch
 
     def override_states(self):
-        self.delta_root_mlp.override_states(self.obj_field, self.scene_field)
-        self.delta_joint_est_mlp.override_states(self.obj_field.warp.articulation)
+        self.kinemtics_proxy.override_states(self.object_field, self.scene_field)
 
     def override_states_inv(self):
-        self.delta_root_mlp.override_states_inv(self.obj_field, self.scene_field)
-        self.delta_joint_est_mlp.override_states_inv(self.obj_field.warp.articulation)
+        self.kinemtics_proxy.override_states_inv(self.object_field, self.scene_field)
 
     def compute_frame_start(self):
         frame_start = torch.Tensor(np.random.rand(self.num_envs)).to(self.device)
@@ -91,17 +114,16 @@ class phys_interface(phys_model):
         return frame_start
 
     def get_batch_input(self, steps_fr):
-        with torch.no_grad():
-            batch = self.sample_sys_state(steps_fr)
-            target_q, target_ja, target_qd, target_jad = (
-                batch["target_q"],
-                batch["target_ja"],
-                batch["target_qd"],
-                batch["target_jad"],
-            )
-            self.target_q_vis = target_q[:, self.frame2step].clone()
-            self.obj2view_vis = batch["obj2view"][:, self.frame2step].clone()
-            self.ks_vis = batch["ks"][:, self.frame2step].clone()
+        batch = self.query_kinematics_proxy(steps_fr)
+        target_q, target_ja, target_qd, target_jad = (
+            batch["target_q"],
+            batch["target_ja"],
+            batch["target_qd"],
+            batch["target_jad"],
+        )
+        self.target_q_vis = target_q[:, self.frame2step].clone()
+        self.obj2view_vis = batch["obj2view"][:, self.frame2step].clone()
+        self.ks_vis = batch["ks"][:, self.frame2step].clone()
 
         target_body_q, target_body_qd, msm = self.combine_targets(
             target_q, target_ja, target_qd, target_jad
@@ -139,11 +161,10 @@ class phys_interface(phys_model):
         return foot_height
 
 
-class WarpRootMLP(nn.Module):
-    def __init__(self, object_field, banmo_body_mlp, scene_field):
-        super(WarpRootMLP, self).__init__()
+class KinemticsProxy(nn.Module):
+    def __init__(self, object_field, scene_field):
+        super(KinemticsProxy, self).__init__()
         self.object_field = copy.deepcopy(object_field)
-        # self.body_mlp = copy.deepcopy(banmo_body_mlp)
         self.scene_field = copy.deepcopy(scene_field)
 
     def forward(self, x):
@@ -152,32 +173,34 @@ class WarpRootMLP(nn.Module):
 
     def override_states(self, object_field, scene_field):
         self.object_field.load_state_dict(object_field.state_dict())
-        # self.body_mlp.load_state_dict(banmo_body_mlp.state_dict())
         self.scene_field.load_state_dict(scene_field.state_dict())
 
     def override_states_inv(self, object_field, scene_field):
+        # # compute the diff between the current and the target
+        # list_current = {}
+        # for name, param in self.object_field.named_parameters():
+        #     list_current[name] = param.data.clone()
+        # for name, param in self.scene_field.named_parameters():
+        #     list_current[name] = param.data.clone()
+
+        # list_target = {}
+        # for name, param in object_field.named_parameters():
+        #     list_target[name] = param.data.clone()
+        # for name, param in scene_field.named_parameters():
+        #     list_target[name] = param.data.clone()
+
+        # for name in list_current.keys():
+        #     diff = list_current[name] - list_target[name]
+        #     if diff.norm() > 0:
+        #         print(name, diff.norm())
+
+        # pdb.set_trace()
+
         object_field.load_state_dict(self.object_field.state_dict())
-        # banmo_body_mlp.load_state_dict(self.body_mlp.state_dict())
         scene_field.load_state_dict(self.scene_field.state_dict())
 
 
-class WarpBodyMLP(nn.Module):
-    def __init__(self, banmo_mlp):
-        super(WarpBodyMLP, self).__init__()
-        self.mlp = copy.deepcopy(banmo_mlp)
-
-    def forward(self, x):
-        out = self.mlp.get_vals(x.long(), return_so3=True)
-        return out
-
-    def override_states(self, banmo_mlp):
-        self.mlp.load_state_dict(banmo_mlp.state_dict())
-
-    def override_states_inv(self, banmo_mlp):
-        banmo_mlp.load_state_dict(self.mlp.state_dict())
-
-
-def pred_est_q(steps_fr, obj_field, scene_field):
+def pred_est_q(steps_fr, object_field, scene_field):
     """
     bs,T
     robot2world = scale(bg2world @ bg2view^-1 @ root2view @ se3)
@@ -188,13 +211,13 @@ def pred_est_q(steps_fr, obj_field, scene_field):
     vidid = vidid.long()
 
     # query obj/scene to view
-    obj_to_view = obj_field.get_camera(frame_id=steps_fr.reshape(-1).long())
+    obj_to_view = object_field.get_camera(frame_id=steps_fr.reshape(-1).long())
     scene_to_view = scene_field.get_camera(frame_id=steps_fr.reshape(-1).long())
 
     # urdf to object
-    orient = obj_field.warp.articulation.orient
+    orient = object_field.warp.articulation.orient
     orient = dqtorch.quaternion_to_matrix(orient)
-    shift = obj_field.warp.articulation.shift
+    shift = object_field.warp.articulation.shift
     urdf_to_object = torch.cat([orient, shift[..., None]], -1)
     urdf_to_object = urdf_to_object.view(1, 3, 4)
     urdf_to_object = torch.cat([urdf_to_object, obj_to_view[:1, -1:]], -2)
@@ -214,7 +237,9 @@ def pred_est_q(steps_fr, obj_field, scene_field):
     urdf_to_world = cv2gl[None] @ urdf_to_world
 
     # scale: from object to urdf
-    urdf_scale = obj_field.logscale.exp() / obj_field.warp.articulation.logscale.exp()
+    urdf_scale = (
+        object_field.logscale.exp() / object_field.warp.articulation.logscale.exp()
+    )
     urdf_to_world = urdf_to_world.clone()
     urdf_to_world[..., :3, 3] *= urdf_scale
 

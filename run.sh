@@ -6,6 +6,7 @@ set +x
 exec "$@"
 
 ### training
+rm -rf logdir/mi-*
 CUDA_VISIBLE_DEVICES=0 python main.py --urdf_template laikago --seqname mi-spin --logname 0 
 CUDA_VISIBLE_DEVICES=0 python main.py --urdf_template laikago --seqname mi-trot --logname 0 
 CUDA_VISIBLE_DEVICES=0 python main.py --urdf_template laikago --seqname mi-pace --logname 0 

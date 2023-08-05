@@ -37,6 +37,14 @@ import warp as wp
 wp.init()
 
 
+def get_local_rank():
+    try:
+        return int(os.environ["LOCAL_RANK"])
+    except:
+        # print("LOCAL_RANK not found, set to 0")
+        return 0
+
+
 class phys_model(nn.Module):
     def __init__(self, opts, dataloader, dt=5e-4, device="cuda"):
         super(phys_model, self).__init__()
@@ -44,8 +52,9 @@ class phys_model(nn.Module):
         logname = "%s-%s" % (opts["seqname"], opts["logname"])
         self.save_dir = os.path.join(opts["logroot"], logname)
 
-        self.total_iters = int(
-            opts["num_rounds"] * opts["iters_per_round"] * opts["ratio_phys_cycle"]
+        self.total_iters = (
+            int(opts["num_rounds"] * opts["iters_per_round"] * opts["ratio_phys_cycle"])
+            + 1
         )
         self.progress = 0
 
@@ -330,84 +339,58 @@ class phys_model(nn.Module):
             axis=0,
         )
 
-    def add_params_to_dict(self, clip_grad=False):
+    def get_lr_dict(self):
+        """Return the learning rate for each category of trainable parameters
+
+        Returns:
+            param_lr_startwith (Dict(str, float)): Learning rate for base model
+            param_lr_with (Dict(str, float)): Learning rate for explicit params
+        """
+        # define a dict for (tensor_name, learning) pair
         opts = self.opts
-        params_list = []
-        lr_dict = {}
-        grad_dict = {}
-        is_invalid_grad = False
-        for name, p in self.named_parameters():
-            params = {"params": [p]}
-            params_list.append(params)
-            if "bg2fg_scale" in name:
-                # print('bg2fg_scale')
-                # print(p)
-                lr = 100 * opts["learning_rate"]  # explicit variables
-                g_th = 0.1
-            elif "bg2world" in name:
-                lr = 0 * opts["learning_rate"]  # do not update
-                g_th = 0
-            elif "global_q" in name:
-                lr = opts["learning_rate"]
-                g_th = 100
-            elif "target_ke" == name or "target_kd" == name:
-                lr = 20 * opts["learning_rate"]
-                g_th = 0.1
-            elif "attach_ke" == name or "attach_kd" == name:
-                lr = 20 * opts["learning_rate"]
-                g_th = 0.1
-            elif "body_mass" == name:
-                lr = 20 * opts["learning_rate"]
-                g_th = 0.1
-            elif "torque_mlp" in name:
-                lr = opts["learning_rate"]
-                g_th = 1
-            elif "residual_f_mlp" in name:
-                lr = opts["learning_rate"]
-                g_th = 1
-            elif "delta_root_mlp" in name:
-                lr = opts["learning_rate"]
-                g_th = 1
-            elif "vel_mlp" in name:
-                lr = opts["learning_rate"]
-                g_th = 1
-            elif "delta_joint_est_mlp" in name:
-                lr = opts["learning_rate"]
-                g_th = 1
-            elif "delta_joint_ref_mlp" in name:
-                lr = opts["learning_rate"]
-                g_th = 1
-            else:
-                lr = opts["learning_rate"]
-                g_th = 1
-            lr_dict[name] = lr
-            if clip_grad:
-                try:
-                    pgrad_nan = p.grad.isnan()
-                    if pgrad_nan.sum() > 0:
-                        print("%s grad invalid" % name)
-                        is_invalid_grad = True
-                except:
-                    pass
-                grad_dict["grad_" + name] = clip_grad_norm_(p, g_th)
+        lr_base = opts["learning_rate"]
+        lr_explicit = lr_base * 20
 
-        return params_list, lr_dict, grad_dict, is_invalid_grad
-
-    def clip_grad(self):
-        """
-        gradient clipping
-        """
-        _, _, grad_dict, is_invalid_grad = self.add_params_to_dict(clip_grad=True)
-
-        if is_invalid_grad:
-            zero_grad_list(self.parameters())
-
-        return grad_dict
+        param_lr_startwith = {
+            "global_q": lr_explicit,
+            "target_ke": lr_explicit,
+            "target_kd": lr_explicit,
+            "attach_ke": lr_explicit,
+            "attach_kd": lr_explicit,
+            "body_mass": lr_explicit,
+        }
+        param_lr_with = {
+            "torque_mlp": lr_base,
+            "residual_f_mlp": lr_base,
+            "delta_root_mlp": lr_base,
+            "vel_mlp": lr_base,
+            "delta_joint_est_mlp": lr_base,
+            "delta_joint_ref_mlp": lr_base,
+        }
+        return param_lr_startwith, param_lr_with
 
     def add_optimizer(self, opts):
-        params_list, lr_dict, _, _ = self.add_params_to_dict()
-        for name, lr in lr_dict.items():
-            print("optimized params: %.5f/%s" % (lr, name))
+        param_lr_startwith, param_lr_with = self.get_lr_dict()
+        params_list = []
+        lr_list = []
+        for name, p in self.named_parameters():
+            name_found = False
+            for params_name, lr in param_lr_with.items():
+                if params_name in name:
+                    params_list.append({"params": p})
+                    lr_list.append(lr)
+                    name_found = True
+                    if get_local_rank() == 0:
+                        print(name, p.shape, lr)
+
+            if name_found:
+                continue
+            for params_name, lr in param_lr_startwith.items():
+                if name.startswith(params_name):
+                    params_list.append({"params": p})
+                    lr_list.append(lr)
+                    if get_local_rank() == 0:
+                        print(name, p.shape, lr)
 
         self.optimizer = torch.optim.AdamW(params_list, lr=opts["learning_rate"])
         # self.optimizer = torch.optim.SGD(
@@ -416,7 +399,7 @@ class phys_model(nn.Module):
 
         self.scheduler = torch.optim.lr_scheduler.OneCycleLR(
             self.optimizer,
-            list(lr_dict.values()),
+            lr_list,
             self.total_iters,
             pct_start=0.02,  # use 2%
             cycle_momentum=False,
@@ -434,11 +417,9 @@ class phys_model(nn.Module):
         # )
 
     def update(self):
-        grad_dict = self.clip_grad()
         self.optimizer.step()
         self.scheduler.step()
         self.optimizer.zero_grad()
-        return grad_dict
 
     @staticmethod
     def compose_delta(target_q, delta_root):

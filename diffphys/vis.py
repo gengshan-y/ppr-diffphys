@@ -4,9 +4,9 @@ os.environ["PYOPENGL_PLATFORM"] = "egl"  # opengl seems to only work with TPU
 import pyrender
 
 import pdb
+import cv2
 import trimesh
 import numpy as np
-import vedo
 from torch.utils.tensorboard import SummaryWriter
 
 import sys
@@ -17,35 +17,9 @@ from diffphys.io import save_vid
 
 class Logger:
     def __init__(self, opts):
-        # vedo vis
         super(Logger, self).__init__()
-        dis = 5
-        self.camera = {
-            "pos": [dis, dis / 2, dis],
-            "focalPoint": [0.5, 0.5, 0.5],
-            "viewup": [0, 1, 0],
-        }
-        self.caption = vedo.Text2D("", c="black")
-        self.floor1 = vedo.Plane(
-            pos=(0.5, 0.01, 0.5),
-            normal=(0, 1, 0),
-            s=(dis / 2, dis / 2),
-            c="blue8",
-            alpha=0.8,
-        )
-        self.floor2 = vedo.Plane(
-            pos=(0.5, 0, 0.5),
-            normal=(0, 1, 0),
-            s=(dis * 2, dis * 2),
-            c="green8",
-            alpha=0.8,
-        )
-
-        # save
         logname = "%s-%s" % (opts["seqname"], opts["logname"])
         self.save_dir = os.path.join(opts["logroot"], logname)
-
-        # tensorboard vis
         self.log = SummaryWriter(self.save_dir, comment=opts["logname"])
 
     def show(self, tag, data):
@@ -61,126 +35,99 @@ class Logger:
             tag = "%05d" % tag
 
         # create window
-        n_wdw = 2
-        resl = 320
+        self.rendered_imgs = {"ref": [], "target": [], "sim": []}
         if "vs" in data.keys():
-            n_wdw += 1
+            self.rendered_imgs["vs"] = []
         if "as" in data.keys():
-            n_wdw += 1
+            self.rendered_imgs["as"] = []
         if "err" in data.keys():
-            n_wdw += 1
-        if "tst" in data.keys():
-            n_wdw += 1
+            self.rendered_imgs["err"] = []
 
-        if "camera" in data.keys():
-            use_gui = False
-        else:
-            use_gui = True
-
-        if use_gui:
-            self.plt = vedo.Plotter(
-                shape=(1, n_wdw),
-                size=(n_wdw * resl, resl),
-                bg="white",
-                sharecam=True,
-                resetcam=False,
-            )
-            video1 = vedo.Video(
-                "%s/simu-%s.gif" % (self.save_dir, tag), backend="ffmpeg", fps=10
-            )
-            video2 = vedo.Video(
-                "%s/simu-%s.mp4" % (self.save_dir, tag), backend="opencv", fps=10
-            )
-            # find the center x/z location
-            vis_offset = np.stack([i.vertices for i in data["xgt"]], 0)[0].mean(0)
-            vis_offset[1] = 0
-            vis_offset = vis_offset[None]
-        else:
-            vis_offset = np.asarray([[0, 0, 0]])
-            self.rendered_imgs = [[] for i in range(n_wdw)]
+        if "img_size" in data.keys():
             img_size = data["img_size"]
             img_size = (
                 img_size[0] * img_size[2],
                 img_size[1] * img_size[2],
                 img_size[2],
             )
-            self.renderer = pyrender.OffscreenRenderer(img_size[0], img_size[1])
+        else:
+            img_size = (640, 640, 1)
+        self.renderer = pyrender.OffscreenRenderer(img_size[0], img_size[1])
 
         # loop over data
         n_frm = len(data["xs"])
         for frame in range(n_frm):
-            self.wdw_idx = 0
-            self.caption.text("iter:%s, frame:%04d" % (tag, frame))
-            if use_gui:
-                camera = None
-            else:
+            # self.caption.text("iter:%s, frame:%04d" % (tag, frame))
+            if "camera" in data.keys():
                 # process the scale
                 rtk = data["camera"][frame]
                 rtk[3] *= img_size[2]
-                camera = {"rtk": rtk}
-
-            # prepare data
-            xgt_mesh = data["xgt"][frame]
-            x_mesh = data["xs"][frame]
+            else:
+                rtk = np.eye(4)
+                # rotate the camera by 45 degrees along x axis
+                rtk[:3, :3] = rtk[:3, :3] @ np.asarray(
+                    cv2.Rodrigues(np.asarray([-5 * np.pi / 6, 0, 0]))[0]
+                )
+                rtk[:3, :3] = rtk[:3, :3] @ np.asarray(
+                    cv2.Rodrigues(np.asarray([0, -np.pi / 2, 0]))[0]
+                )
+                rtk[:3, 3] = np.asarray([0.0, 0.0, 3.0])
+                fl = max(img_size[0], img_size[1])
+                rtk[3] = np.asarray([fl, fl, img_size[0] / 2, img_size[1] / 2])
+            camera = {"rtk": rtk}
 
             # gt mesh
-            mesh = vedo.Mesh([xgt_mesh.vertices - vis_offset, xgt_mesh.faces])
-            self.render_wdw(
-                mesh, val=xgt_mesh.visual.vertex_colors, val_max=255, camera=camera
-            )
+            img = self.render_wdw(data["xgt"][frame], camera=camera)
+            self.rendered_imgs["ref"].append(img)
 
-            if "tst" in data.keys():
-                tst_mesh = data["tst"][frame]
-                mesh = vedo.Mesh([tst_mesh.vertices - vis_offset, tst_mesh.faces])
-                self.render_wdw(
-                    mesh, val=tst_mesh.visual.vertex_colors, val_max=255, camera=camera
-                )
+            # target
+            img = self.render_wdw(data["tst"][frame], camera=camera)
+            self.rendered_imgs["target"].append(img)
 
-            # estimated mesh
-            mesh = vedo.Mesh([x_mesh.vertices - vis_offset, x_mesh.faces])
-            self.render_wdw(
-                mesh, val=x_mesh.visual.vertex_colors, val_max=255, camera=camera
-            )
+            # simulated
+            img = self.render_wdw(data["xs"][frame], camera=camera)
+            self.rendered_imgs["sim"].append(img)
 
             # error
             if "err" in data.keys():
-                mesh = vedo.Mesh([x_mesh.vertices - vis_offset, x_mesh.faces])
-                self.render_wdw(
-                    mesh, val=data["err"][frame], val_max=0.1, camera=camera
+                img = self.render_wdw(
+                    data["xs"][frame],
+                    val=data["err"][frame],
+                    val_max=0.1,
+                    camera=camera,
                 )
+                self.rendered_imgs["err"].append(img)
 
             # acceleration
             if "as" in data.keys():
-                mesh = vedo.Mesh([x_mesh.vertices - vis_offset, x_mesh.faces])
-                self.render_wdw(mesh, val=data["as"][frame], val_max=2, camera=camera)
+                img = self.render_wdw(
+                    data["xs"][frame], val=data["as"][frame], val_max=2, camera=camera
+                )
+                self.rendered_imgs["as"].append(img)
             # velocity
             if "vs" in data.keys():
-                mesh = vedo.Mesh([x_mesh.vertices - vis_offset, x_mesh.faces])
-                self.render_wdw(mesh, val=data["vs"][frame], val_max=0.5, camera=camera)
-
-            if use_gui:
-                video1.addFrame()
-                video2.addFrame()
-
-        if use_gui:
-            video1.close()
-            video2.close()
-            self.plt.close()
-        else:
-            for i in range(n_wdw):
-                save_vid(
-                    "%s/vid%d-simu-%s" % (self.save_dir, i, tag),
-                    self.rendered_imgs[i],
-                    suffix=".gif",
-                    upsample_frame=0,
+                img = self.render_wdw(
+                    data["xs"][frame], val=data["vs"][frame], val_max=0.5, camera=camera
                 )
-                save_vid(
-                    "%s/vid%d-simu-%s" % (self.save_dir, i, tag),
-                    self.rendered_imgs[i],
-                    suffix=".mp4",
-                    upsample_frame=0,
-                )
-            self.renderer.delete()
+                self.rendered_imgs["vs"].append(img)
+        self.renderer.delete()
+
+        # combine all
+        all_imgs = []
+        for i in range(n_frm):
+            img = np.concatenate(
+                [frames[i] for frames in self.rendered_imgs.values()], axis=1
+            )
+            all_imgs.append(img)
+        self.rendered_imgs["all"] = all_imgs
+
+        for key, frames in self.rendered_imgs.items():
+            save_vid(
+                "%s/%s-%s" % (self.save_dir, key, tag),
+                frames,
+                suffix=".mp4",
+                upsample_frame=0,
+            )
         # TODO save to gltf (given bones etc.)
 
     def write_log(self, log_data, step):
@@ -192,36 +139,31 @@ class Logger:
             if len(val.shape) == 1:
                 val = np.tile(val[:, None], (1, 3))
             val = np.clip(val, -val_max, val_max)
-            mesh.pointdata["RGB"] = ((val + val_max) / val_max / 2 * 255).astype(
-                np.uint8
-            )
-            mesh.pointdata.select("RGB")
-        if camera is None:
-            camera = self.camera
-            self.plt.clear(at=self.wdw_idx)
-            self.plt.show(
-                [mesh, self.floor1, self.floor2, self.caption],
-                at=self.wdw_idx,
-                resetcam=False,
-                interactive=False,
-                camera=camera,
-            )
-            self.wdw_idx += 1
-        else:
-            img = render_extra(self.renderer, mesh, camera["rtk"])
-            self.rendered_imgs[self.wdw_idx].append(img)
-            self.wdw_idx += 1
+            mesh.vertex_colors = ((val + val_max) / val_max / 2 * 255).astype(np.uint8)
+        img = render_extra(self.renderer, mesh, camera["rtk"])
+        return img
 
 
 def render_extra(renderer, mesh, camera):
-    mesh = trimesh.Trimesh(
-        mesh.points(), mesh.faces(), vertex_colors=mesh.pointdata["RGB"]
-    )
+    # create scene
     plane_transform = np.eye(4)
-    plane_transform[1, 1] = -1
-    floor = trimesh.primitives.Box(extents=[20, 0, 20], transform=plane_transform)
-    floor.visual.vertex_colors[:, :3] = 192
-    mesh = trimesh.util.concatenate([mesh, floor])
+    floor1 = trimesh.primitives.Box(extents=[20, 0, 20], transform=plane_transform)
+    floor1.visual.vertex_colors[:, 0] = 10
+    floor1.visual.vertex_colors[:, 1] = 200
+    floor1.visual.vertex_colors[:, 2] = 60
+    floor1.visual.vertex_colors[:, 3] = 128
+
+    plane_transform[1, 3] = 0.01
+    floor2 = trimesh.primitives.Box(extents=[5, 0, 5], transform=plane_transform)
+    floor2.visual.vertex_colors[:, 0] = 10
+    floor2.visual.vertex_colors[:, 1] = 60
+    floor2.visual.vertex_colors[:, 2] = 200
+    floor2.visual.vertex_colors[:, 3] = 128
+
+    mesh = trimesh.util.concatenate([mesh, floor1, floor2])
+
+    # mesh.export("tmp/mesh.obj")
+    # pdb.set_trace()
 
     mesh.vertices = mesh.vertices @ camera[:3, :3].T + camera[:3, 3][None]
     scene = pyrender.Scene(ambient_light=0.4 * np.asarray([1.0, 1.0, 1.0, 1.0]))
@@ -237,7 +179,7 @@ def render_extra(renderer, mesh, camera):
     cam_pose[-1, -1] = 1
     scene.add(cam, pose=cam_pose)
 
-    direc_l = pyrender.DirectionalLight(color=np.ones(3), intensity=2.0)
+    direc_l = pyrender.DirectionalLight(color=np.ones(3), intensity=4.0)
     theta = 9 * np.pi / 9
     light_pose = np.asarray(
         [
@@ -250,6 +192,8 @@ def render_extra(renderer, mesh, camera):
     direc_l_node = scene.add(direc_l, pose=light_pose)
 
     color, _ = renderer.render(scene, flags=pyrender.RenderFlags.SHADOWS_DIRECTIONAL)
+
     # color, _ = renderer.render(scene,flags=pyrender.RenderFlags.SHADOWS_DIRECTIONAL | pyrender.RenderFlags.SKIP_CULL_FACES)
-    # cv2.imwrite('tmp/0.jpg', color)
+    # cv2.imwrite("tmp/0.jpg", color)
+    # pdb.set_trace()
     return color
