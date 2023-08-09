@@ -199,24 +199,6 @@ class phys_model(nn.Module):
         )
 
     def add_nn_modules(self):
-        self.torque_mlp = NeRF(
-            tscale=1.0 / self.gt_steps,
-            N_freqs=6,
-            D=8,
-            W=256,
-            out_channels=self.n_dof,
-            in_channels_xyz=13,
-        )
-
-        self.residual_f_mlp = NeRF(
-            tscale=1.0 / self.gt_steps,
-            N_freqs=6,
-            D=8,
-            W=256,
-            out_channels=6 * self.n_links,
-            in_channels_xyz=13,
-        )
-
         self.delta_root_mlp = NeRF(
             tscale=1.0 / self.gt_steps,
             N_freqs=6,
@@ -235,7 +217,7 @@ class phys_model(nn.Module):
             in_channels_xyz=13,
         )
 
-        self.delta_joint_ref_mlp = NeRF(
+        self.delta_joint_mlp = NeRF(
             tscale=1.0 / self.gt_steps,
             N_freqs=6,
             D=8,
@@ -244,12 +226,21 @@ class phys_model(nn.Module):
             in_channels_xyz=13,
         )
 
-        self.delta_joint_est_mlp = NeRF(
+        self.torque_mlp = NeRF(
             tscale=1.0 / self.gt_steps,
             N_freqs=6,
             D=8,
             W=256,
             out_channels=self.n_dof,
+            in_channels_xyz=13,
+        )
+
+        self.residual_f_mlp = NeRF(
+            tscale=1.0 / self.gt_steps,
+            N_freqs=6,
+            D=8,
+            W=256,
+            out_channels=6 * self.n_links,
             in_channels_xyz=13,
         )
 
@@ -354,12 +345,11 @@ class phys_model(nn.Module):
             "body_mass": lr_explicit,
         }
         param_lr_with = {
+            "delta_root_mlp": lr_base,
+            "delta_joint_mlp": lr_base,
+            "vel_mlp": lr_base,
             "torque_mlp": lr_base,
             "residual_f_mlp": lr_base,
-            "delta_root_mlp": lr_base,
-            "vel_mlp": lr_base,
-            "delta_joint_est_mlp": lr_base,
-            "delta_joint_ref_mlp": lr_base,
         }
         return param_lr_startwith, param_lr_with
 
@@ -451,7 +441,7 @@ class phys_model(nn.Module):
         torques:  bs,T,dof
         delta_ja, bs,T,dof
         """
-        # additional torques from net
+        # additional torques
         bs, nstep = steps_fr.shape
         torques = self.torque_mlp(steps_fr.reshape(-1, 1))
         torques = torch.cat([torch.zeros_like(torques[:, :1].repeat(1, 6)), torques], 1)
@@ -460,52 +450,43 @@ class phys_model(nn.Module):
 
         # residual force
         res_f = self.residual_f_mlp(steps_fr.reshape(-1, 1))
-        res_f = res_f.view(bs, nstep, -1, 6)
-        # res_f[:,:,1:] = 0
-        res_f[..., 3:6] *= 10
-        res_f *= 0
-        # res_f = res_f.view(bs,nstep,-1,6)
-        # res_f[:,:,:,4] = 1
+        # res_f = res_f.view(bs, nstep, -1, 6)
+        # res_f[..., 3:6] *= 10
         res_f = res_f.view(bs, nstep, -1)
+        res_f *= 0
 
         # delta root transoforms: G = Gd G
         delta_root = self.delta_root_mlp(steps_fr.reshape(-1, 1))
         delta_root = delta_root.view(bs, nstep, -1)
 
-        ## ref joints from net
-        # delta_ja_ref = self.delta_joint_ref_mlp(steps_fr.reshape(-1,1))
-        # delta_ja_ref = delta_ja_ref.view(bs,nstep,-1)
-
         # delta joints from net
-        delta_ja_est = self.delta_joint_est_mlp(steps_fr.reshape(-1, 1))
-        delta_ja_est = delta_ja_est.view(bs, nstep, -1)
-        delta_ja_ref = delta_ja_est
+        delta_ja_ref = self.delta_joint_mlp(steps_fr.reshape(-1, 1))
+        delta_ja_ref = delta_ja_ref.view(bs, nstep, -1)
 
-        vel_pred = self.vel_mlp(steps_fr.reshape(-1, 1))
-        vel_pred = vel_pred.view(bs, nstep, -1)
-
-        return torques, delta_root, delta_ja_ref, delta_ja_est, vel_pred, res_f
+        # velocity prediction
+        state_qd = self.vel_mlp(steps_fr.reshape(-1, 1))
+        state_qd = state_qd.view(bs, nstep, -1)
+        return torques, delta_root, delta_ja_ref, state_qd, res_f
 
     @staticmethod
-    def rearrange_pred(est_q, est_ja, ref_ja, state_qd, torques, res_f):
+    def rearrange_pred(queried_q, queried_ja, queried_qd, torques, res_f):
         """
         est_q:       bs,T,7
         state_qd     bs,6
         """
-        bs, nstep, _ = est_q.shape
-
-        # initial states
-        state_q = torch.cat([est_q, est_ja], -1)
+        bs, nstep, _ = queried_q.shape
 
         # N, bs*...
-        ref = torch.cat([torch.zeros_like(ref_ja[..., :1].repeat(1, 1, 6)), ref_ja], -1)
-        ref = ref.permute(1, 0, 2).reshape(nstep, -1)
-        state_q = state_q.permute(1, 0, 2).reshape(nstep, -1)
-        state_qd = state_qd.permute(1, 0, 2).reshape(nstep, -1)
+        queried_q = torch.cat([queried_q, queried_ja], -1)
+        queried_q = queried_q.permute(1, 0, 2).reshape(nstep, -1)
+        queried_qd = queried_qd.permute(1, 0, 2).reshape(nstep, -1)
+        ref_ja = torch.cat(
+            [torch.zeros_like(queried_ja[..., :1].repeat(1, 1, 6)), queried_ja], -1
+        )
+        ref_ja = ref_ja.permute(1, 0, 2).reshape(nstep, -1)
         torques = torques.reshape(nstep, -1)
         res_f = res_f.reshape(nstep, -1, 6)
-
-        return ref, state_q, state_qd, torques, res_f
+        return ref_ja, queried_q, queried_qd, torques, res_f
 
     def get_foot_height(self, state_body_q):
         mesh_pts, faces_single = articulate_robot_rbrt_batch(
@@ -561,26 +542,24 @@ class phys_model(nn.Module):
             target_q, target_ja, target_qd, target_jad
         )
 
-        # combine preds
+        # get network outputs
         (
             torques,
             delta_q,
-            delta_ja_ref,
-            delta_ja_est,
-            state_qd,
+            delta_ja,
+            queried_qd,
             res_f,
         ) = self.get_net_pred(steps_fr)
 
         # refine
-        est_q = self.compose_delta(target_q, delta_q)  # delta x target
-        est_ja = target_ja + delta_ja_est
-        ref_ja = target_ja + delta_ja_ref
+        queried_q = self.compose_delta(target_q, delta_q)  # delta x target
+        queried_ja = target_ja + delta_ja
 
-        ref, state_q, state_qd, torques, res_f = self.rearrange_pred(
-            est_q, est_ja, ref_ja, state_qd, torques, res_f
+        ref_ja, queried_q, queried_qd, torques, res_f = self.rearrange_pred(
+            queried_q, queried_ja, queried_qd, torques, res_f
         )
 
-        return target_position, ref, state_q, state_qd, torques, res_f
+        return target_position, ref_ja, queried_q, queried_qd, torques, res_f
 
     def forward(self, frame_start=None):
         # capture requires cuda memory to be pre-allocated
@@ -650,7 +629,7 @@ class phys_model(nn.Module):
             self,
         )
 
-        # compute state pos/vel: bs, T, K,7/6
+        # compute queried states
         queried_q = queried_q[self.frame2step].reshape(
             self.wdw_length + 1, self.num_envs, -1
         )
@@ -660,11 +639,9 @@ class phys_model(nn.Module):
         queried_position, queried_velocity, self.tstate = ForwardKinematics.apply(
             queried_q, queried_qd, self
         )
-
-        # compute foot height
         foot_height = self.get_foot_height(queried_position)
 
-        # compute tracking targets
+        # compute targets and simulated states
         target_position = target_position.reshape(
             self.num_envs, self.wdw_length + 1, -1, 7
         )
@@ -675,47 +652,46 @@ class phys_model(nn.Module):
             self.wdw_length + 1, self.num_envs, -1, 6
         ).permute(1, 0, 2, 3)
 
-        # position loss
         total_loss = 0
+        loss_dict = {}
+        # targeting loss
         loss_traj = se3_loss(sim_position, target_position).mean(-1)
         loss_traj[outseq_idx] = 0
         loss_traj = clip_loss(loss_traj)
-        total_loss += 0.1 * loss_traj
+        total_loss += self.opts["traj_wt"] * loss_traj
+        loss_dict["loss_traj"] = loss_traj
 
         # regularization
         loss_pos_state = se3_loss(queried_position, sim_position).mean(-1)[:, 1:]
         loss_pos_state[outseq_idx[:, 1:]] = 0
         loss_pos_state = clip_loss(loss_pos_state)
-        total_loss += 1e-1 * loss_pos_state
+        total_loss += self.opts["reg_pose_state_wt"] * loss_pos_state
+        loss_dict["loss_pos_state"] = loss_pos_state
 
         loss_vel_state = se3_loss(queried_velocity, sim_velocity).mean(-1)[:, 1:]
         loss_vel_state[outseq_idx[:, 1:]] = 0
         loss_vel_state = clip_loss(loss_vel_state)
-        total_loss += loss_vel_state * 1e-5
+        total_loss += self.opts["reg_vel_state_wt"] * loss_vel_state
+        loss_dict["loss_vel_state"] = loss_vel_state
 
         reg_torque = torques.pow(2).mean()
-        total_loss += reg_torque * 1e-5
+        total_loss += self.opts["reg_torque_wt"] * reg_torque
+        loss_dict["loss_reg_torque"] = reg_torque
 
         reg_res_f = res_f.pow(2).mean()
-        total_loss += reg_res_f * 5e-5
+        total_loss += self.opts["reg_res_f_wt"] * reg_res_f
+        loss_dict["loss_reg_res_f"] = reg_res_f
 
         reg_foot = foot_height.pow(2).mean()
-        # total_loss += foot_reg * 1e-4
+        total_loss += self.opts["reg_foot_wt"] * reg_foot
+        loss_dict["loss_reg_foot"] = reg_foot
 
         if total_loss.isnan():
             pdb.set_trace()
 
         # loss
         print("loss: %.4f / fw time: %.2f s" % (total_loss.cpu(), time.time() - beg))
-
-        loss_dict = {}
         loss_dict["total_loss"] = total_loss
-        loss_dict["loss_traj"] = loss_traj
-        loss_dict["loss_pos_state"] = loss_pos_state
-        loss_dict["loss_vel_state"] = loss_vel_state
-        loss_dict["loss_reg_torque"] = reg_torque
-        loss_dict["loss_reg_res_f"] = reg_res_f
-        loss_dict["loss_reg_foot"] = reg_foot
 
         return loss_dict
 
@@ -772,7 +748,7 @@ class phys_model(nn.Module):
             # this triggers pyrender
             obj2world = self.target_q_vis[0]
             obj2world = se3_vec2mat(obj2world)
-            world2obj = obj2world.inverse()
+            world2obj = obj2world.inverse(-1, -2)
 
             obj2view = self.obj2view_vis[0]
 

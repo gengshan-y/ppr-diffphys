@@ -23,9 +23,9 @@ class phys_interface(phys_model):
         super().add_nn_modules()
         self.kinemtics_proxy = KinemticsProxy(self.object_field, self.scene_field)
         del self.delta_root_mlp
-        del self.delta_joint_est_mlp
+        del self.delta_joint_mlp
         self.delta_root_mlp = lambda x: self.kinemtics_proxy(x)
-        self.delta_joint_est_mlp = (
+        self.delta_joint_mlp = (
             lambda x: self.kinemtics_proxy.object_field.warp.articulation.get_vals(
                 x.long(), return_so3=True
             )
@@ -131,18 +131,17 @@ class phys_interface(phys_model):
 
         (
             torques,
-            est_q,
+            queried,
             ref_ja,
-            est_ja,
-            state_qd,
+            queried_qd,
             res_f,
         ) = self.get_net_pred(steps_fr)
 
-        ref, state_q, state_qd, torques, res_f = self.rearrange_pred(
-            est_q, est_ja, ref_ja, state_qd, torques, res_f
+        ref_ja, queried_q, queried_qd, torques, res_f = self.rearrange_pred(
+            queried, ref_ja, queried_qd, torques, res_f
         )
 
-        return target_position, ref, state_q, state_qd, torques, res_f
+        return target_position, ref_ja, queried_q, queried_qd, torques, res_f
 
     def get_foot_height(self, state_body_q):
         kp_idxs = [

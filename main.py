@@ -20,8 +20,20 @@ flags.DEFINE_integer("num_rounds", 5, "total update iterations")
 flags.DEFINE_string("urdf_template", "a1", "whether to use predefined skeleton")
 flags.DEFINE_integer("num_freq", 10, "number of freqs in fourier encoding")
 flags.DEFINE_integer("t_embed_dim", 128, "dimension of the pose code")
-flags.DEFINE_integer("iters_per_round", 100, "iters per epoch")
+flags.DEFINE_integer("iters_per_round", 20, "iters per epoch")
 flags.DEFINE_float("ratio_phys_cycle", 1.0, "iters per epoch")
+
+flags.DEFINE_float("traj_wt", 0.1, "weight for traj matching loss")
+flags.DEFINE_float("reg_pose_state_wt", 0.0, "weight for position matching reg")
+flags.DEFINE_float("reg_vel_state_wt", 0.0, "weight for velocity matching reg")
+flags.DEFINE_float("reg_torque_wt", 0.0, "weight for torque regularization")
+flags.DEFINE_float("reg_res_f_wt", 0.0, "weight for residual force regularization")
+flags.DEFINE_float("reg_foot_wt", 0.0, "weight for foot contact regularization")
+# flags.DEFINE_float("reg_pose_state_wt", 0.1, "weight for position matching reg")
+# flags.DEFINE_float("reg_vel_state_wt", 1e-5, "weight for velocity matching reg")
+# flags.DEFINE_float("reg_torque_wt", 1e-5, "weight for torque regularization")
+# flags.DEFINE_float("reg_res_f_wt", 5e-5, "weight for residual force regularization")
+# flags.DEFINE_float("reg_foot_wt", 1e-4, "weight for foot contact regularization")
 
 
 def main(_):
@@ -52,7 +64,8 @@ def main(_):
 
             # training
             # model.reinit_envs(100, wdw_length=1,is_eval=False)
-            model.reinit_envs(10, wdw_length=8, is_eval=False)
+            # model.reinit_envs(10, wdw_length=8, is_eval=False)
+            model.reinit_envs(10, wdw_length=24, is_eval=False)
             ##TODO schedule window length
             # wdw_length = int(0.5*(model.gt_steps - 1)/["total_iters"]*it + 1)
             # num_envs = max(1,int(100 / wdw_length))

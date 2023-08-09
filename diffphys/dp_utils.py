@@ -110,7 +110,7 @@ def se3_loss(pred, gt, rot_ratio=0.1):
     if rot_pred.shape[-1] == 3:
         rot_pred = axis_angle_to_matrix(rot_pred)
         rot_gt = axis_angle_to_matrix(rot_gt)
-        rot_gti = rot_gt.inverse()
+        rot_gti = rot_gt.transpose(-1, -2)
     elif rot_pred.shape[-1] == 4:
         rot_pred = dqtorch.quaternion_to_matrix(
             rot_pred[..., [3, 0, 1, 2]]
