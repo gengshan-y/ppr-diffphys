@@ -2,11 +2,9 @@ import os, sys
 import time
 import torch
 import torch.nn as nn
-from torch.nn.utils import clip_grad_norm_
 import pdb
 import numpy as np
 import scipy.interpolate
-from scipy.spatial.transform import Rotation as R
 
 from diffphys.dataloader import parse_amp
 from diffphys.torch_utils import NeRF
@@ -133,25 +131,25 @@ class phys_model(nn.Module):
         # limit_ke=1.e+4, # useful when joints violating limits
         # limit_kd=1.e+1)
 
-        # make feet heavier
-        name2link_idx = [
-            (link.name, it) for it, link in enumerate(self.robot.urdf.links)
-        ]
-        dict_unique_body = dict(enumerate(self.robot.urdf.unique_body_idx))
-        self.dict_unique_body_inv = {v: k for k, v in dict_unique_body.items()}
-        name2link_idx = [
-            (link.name, self.dict_unique_body_inv[it])
-            for it, link in enumerate(self.robot.urdf.links)
-            if it in dict_unique_body.values()
-        ]
-        name2link_idx = dict(name2link_idx)
-        # lighter trunk
-        # for kp_name in ['link_136_Bauch_Y', 'link_137_Bauch.001_Y',
-        #                'link_138_Brust_Y', 'link_139_Hals_Y']:
-        #    kp_idx = name2link_idx[kp_name]
-        #    self.articulation_builder.body_mass[kp_idx] *= 1./10
-
         if hasattr(self.robot.urdf, "kp_links"):
+            # make feet heavier
+            name2link_idx = [
+                (link.name, it) for it, link in enumerate(self.robot.urdf.links)
+            ]
+            dict_unique_body = dict(enumerate(self.robot.urdf.unique_body_idx))
+            self.dict_unique_body_inv = {v: k for k, v in dict_unique_body.items()}
+            name2link_idx = [
+                (link.name, self.dict_unique_body_inv[it])
+                for it, link in enumerate(self.robot.urdf.links)
+                if it in dict_unique_body.values()
+            ]
+            name2link_idx = dict(name2link_idx)
+            # lighter trunk
+            # for kp_name in ['link_136_Bauch_Y', 'link_137_Bauch.001_Y',
+            #                'link_138_Brust_Y', 'link_139_Hals_Y']:
+            #    kp_idx = name2link_idx[kp_name]
+            #    self.articulation_builder.body_mass[kp_idx] *= 1./10
+
             # for human and wolf
             for i in range(len(self.articulation_builder.body_mass)):
                 self.articulation_builder.body_mass[i] = 2
@@ -194,9 +192,6 @@ class phys_model(nn.Module):
 
         # optimizer
         self.add_optimizer(opts)
-
-        # other hypoter parameters
-        self.th_multip = 0  # seems to cause problems
 
     def init_global_q(self):
         self.global_q = nn.Parameter(
@@ -396,9 +391,6 @@ class phys_model(nn.Module):
                     print(name, "not found")
 
         self.optimizer = torch.optim.AdamW(params_list, lr=opts["learning_rate"])
-        # self.optimizer = torch.optim.SGD(
-        # params_list,
-        # lr=1)
 
         self.scheduler = torch.optim.lr_scheduler.OneCycleLR(
             self.optimizer,
@@ -464,14 +456,14 @@ class phys_model(nn.Module):
         torques = self.torque_mlp(steps_fr.reshape(-1, 1))
         torques = torch.cat([torch.zeros_like(torques[:, :1].repeat(1, 6)), torques], 1)
         torques = torques.view(bs, nstep, -1)
-        # torques *= 0
+        torques *= 0
 
         # residual force
         res_f = self.residual_f_mlp(steps_fr.reshape(-1, 1))
         res_f = res_f.view(bs, nstep, -1, 6)
         # res_f[:,:,1:] = 0
         res_f[..., 3:6] *= 10
-        # res_f *= 0
+        res_f *= 0
         # res_f = res_f.view(bs,nstep,-1,6)
         # res_f[:,:,:,4] = 1
         res_f = res_f.view(bs, nstep, -1)
@@ -529,14 +521,14 @@ class phys_model(nn.Module):
         )
         return frame_start
 
-    def combine_targets(self, target_q, target_ja, target_qd, target_jad):
+    def fk_pos_vel(self, target_q, target_ja, target_qd, target_jad):
         # combine targets
-        q_at_frame = torch.cat([target_q, target_ja], -1)[:, self.frame2step]
-        qd_at_frame = torch.cat([target_qd, target_jad], -1)[:, self.frame2step]
-        q_at_frame = q_at_frame.permute(1, 0, 2).contiguous()
-        qd_at_frame = qd_at_frame.permute(1, 0, 2).contiguous()
+        target_q_at_frame = torch.cat([target_q, target_ja], -1)[:, self.frame2step]
+        target_q_at_frame = target_q_at_frame.permute(1, 0, 2).contiguous()
+        target_qd_at_frame = torch.cat([target_qd, target_jad], -1)[:, self.frame2step]
+        target_qd_at_frame = target_qd_at_frame.permute(1, 0, 2).contiguous()
         target_body_q, target_body_qd, msm = ForwardKinematics.apply(
-            q_at_frame, qd_at_frame, self
+            target_q_at_frame, target_qd_at_frame, self
         )
         return target_body_q, target_body_qd, msm
 
@@ -565,7 +557,7 @@ class phys_model(nn.Module):
         target_q = rotate_frame(self.global_q, target_q)
         target_qd = rotate_frame_vel(self.global_q, target_qd)
 
-        target_body_q, target_body_qd, msm = self.combine_targets(
+        target_position, target_velocity, self.msm = self.fk_pos_vel(
             target_q, target_ja, target_qd, target_jad
         )
 
@@ -584,17 +576,11 @@ class phys_model(nn.Module):
         est_ja = target_ja + delta_ja_est
         ref_ja = target_ja + delta_ja_ref
 
-        return (
-            target_body_q,
-            target_body_qd,
-            msm,
-            ref_ja,
-            est_q,
-            est_ja,
-            state_qd,
-            torques,
-            res_f,
+        ref, state_q, state_qd, torques, res_f = self.rearrange_pred(
+            est_q, est_ja, ref_ja, state_qd, torques, res_f
         )
+
+        return target_position, ref, state_q, state_qd, torques, res_f
 
     def forward(self, frame_start=None):
         # capture requires cuda memory to be pre-allocated
@@ -603,42 +589,32 @@ class phys_model(nn.Module):
         # this launch is not recorded in tape
         # wp.capture_launch(self.graph)
 
-        # get a batch of ref pos/orn/joints
+        # get time steps
         if frame_start is None:
-            # get a batch of clips
             frame_start = self.compute_frame_start()
         else:
             frame_start = frame_start[: self.num_envs]
-
         steps_fr = frame_start[:, None] + self.local_steps_fr[None]  # bs,T
-        # TODO steps that are in the same seq
         vidid, _ = fid_reindex(
             steps_fr[:, self.frame2step], len(self.data_offset) - 1, self.data_offset
         )
         outseq_idx = (vidid[:, :1] - vidid) != 0
 
-        # compute target pos/vel
+        # get a batch of ref pos/orn/joints
         beg = time.time()
         (
-            target_body_q,
-            target_body_qd,
-            self.msm,
-            ref_ja,
-            est_q,
-            est_ja,
-            state_qd,
+            target_position,
+            ref_q,
+            queried_q,
+            queried_qd,
             torques,
             res_f,
         ) = self.get_batch_input(steps_fr)
 
-        ref, state_q, state_qd, torques, res_f = self.rearrange_pred(
-            est_q, est_ja, ref_ja, state_qd, torques, res_f
-        )
-
         # forward simulation
         res_fin = res_f.clone()
-        q_init = state_q[0]
-        qd_init = state_qd[0]
+        q_init = queried_q[0]
+        qd_init = queried_qd[0]
         if self.training:
             # TODO add some noise
             noise_ratio = np.clip(1 - 1.5 * self.progress, 0, 1)
@@ -662,12 +638,12 @@ class phys_model(nn.Module):
         target_ke = self.target_ke[None].repeat(self.num_envs, 1).view(-1)
         target_kd = self.target_kd[None].repeat(self.num_envs, 1).view(-1)
         body_mass = self.body_mass[None].repeat(self.num_envs, 1).view(-1)
-        body_qs, body_qd = ForwardWarp.apply(
+        sim_position, sim_velocity = ForwardWarp.apply(
             q_init,
             qd_init,
             torques,
             res_fin,
-            ref,
+            ref_q,
             target_ke,
             target_kd,
             body_mass,
@@ -675,82 +651,55 @@ class phys_model(nn.Module):
         )
 
         # compute state pos/vel: bs, T, K,7/6
-        state_q = state_q[self.frame2step].reshape(
+        queried_q = queried_q[self.frame2step].reshape(
             self.wdw_length + 1, self.num_envs, -1
         )
-        state_qd = state_qd[self.frame2step].reshape(
+        queried_qd = queried_qd[self.frame2step].reshape(
             self.wdw_length + 1, self.num_envs, -1
         )
-        state_body_q, state_body_qd, self.tstate = ForwardKinematics.apply(
-            state_q, state_qd, self
+        queried_position, queried_velocity, self.tstate = ForwardKinematics.apply(
+            queried_q, queried_qd, self
         )
 
-        # make sure the feet is above the ground
-        foot_height = self.get_foot_height(state_body_q)
+        # compute foot height
+        foot_height = self.get_foot_height(queried_position)
 
+        # compute tracking targets
+        target_position = target_position.reshape(
+            self.num_envs, self.wdw_length + 1, -1, 7
+        )
+        sim_position = sim_position.reshape(
+            self.wdw_length + 1, self.num_envs, -1, 7
+        ).permute(1, 0, 2, 3)
+        sim_velocity = sim_velocity.reshape(
+            self.wdw_length + 1, self.num_envs, -1, 6
+        ).permute(1, 0, 2, 3)
+
+        # position loss
         total_loss = 0
-        # root loss
-        # root_target = torch.cuda.FloatTensor([1,0,0],device=self.device)
-        # root_traj = body_qs[-1,0,:3]
+        loss_traj = se3_loss(sim_position, target_position).mean(-1)
+        loss_traj[outseq_idx] = 0
+        loss_traj = clip_loss(loss_traj)
+        total_loss += 0.1 * loss_traj
 
-        # root_target = torch.cuda.FloatTensor([[0,0.45,0]],device=self.device)
-        # root_traj = body_qs[:, 0, :3] # S, 13, 7
+        # regularization
+        loss_pos_state = se3_loss(queried_position, sim_position).mean(-1)[:, 1:]
+        loss_pos_state[outseq_idx[:, 1:]] = 0
+        loss_pos_state = clip_loss(loss_pos_state)
+        total_loss += 1e-1 * loss_pos_state
 
-        body_target = target_body_q.reshape(self.num_envs, self.wdw_length + 1, -1, 7)
-        body_traj = body_qs.reshape(self.wdw_length + 1, self.num_envs, -1, 7).permute(
-            1, 0, 2, 3
-        )
-        body_vel = body_qd.reshape(self.wdw_length + 1, self.num_envs, -1, 6).permute(
-            1, 0, 2, 3
-        )
-
-        loss_root = se3_loss(body_traj, body_target).mean(-1)
-        loss_root[outseq_idx] = 0
-        loss_root = clip_loss(loss_root, 0.02 * self.th_multip)
-        total_loss += 0.1 * loss_root
-
-        ## body loss
-        # body_traj = body_qs[:, 1:] # S, 13, 7
-        # body_target = body_qs[:1,1:].detach() # first frame
-        # loss_pose = (body_traj - body_target).pow(2).sum()
-        # total_loss += loss_pose
-
-        ## velocity loss
-        loss_vel = se3_loss(state_body_qd, target_body_qd, rot_ratio=0).mean(-1)[:, 1:]
-        loss_vel[outseq_idx[:, 1:]] = 0
-        loss_vel = clip_loss(loss_vel, 20 * self.th_multip)
-        # total_loss += loss_vel*1e-5
-
-        ## vel input loss
-        # loss_vel = (vel_pred[:,:1,:6] - pred_qd).norm(2,1).mean()
-        # loss_vel +=(vel_pred[:,:1,6:] - pred_joint_qd).norm(2,1).mean()
-        # loss_vel *= 1e-4
-        # total_loss += loss_vel
-
-        # state matching
-        loss_root_state = se3_loss(state_body_q, body_traj).mean(-1)[:, 1:]
-        loss_root_state[outseq_idx[:, 1:]] = 0
-        loss_root_state = clip_loss(loss_root_state, 0.02 * self.th_multip)
-        total_loss += 1e-1 * loss_root_state
-
-        loss_vel_state = se3_loss(state_body_qd, body_vel).mean(-1)[:, 1:]
+        loss_vel_state = se3_loss(queried_velocity, sim_velocity).mean(-1)[:, 1:]
         loss_vel_state[outseq_idx[:, 1:]] = 0
-        loss_vel_state = clip_loss(loss_vel_state, 20 * self.th_multip)
+        loss_vel_state = clip_loss(loss_vel_state)
         total_loss += loss_vel_state * 1e-5
 
-        ## reg
-        torque_reg = torques.pow(2).mean()
-        total_loss += torque_reg * 1e-5
+        reg_torque = torques.pow(2).mean()
+        total_loss += reg_torque * 1e-5
 
-        res_f_reg = res_f.pow(2).mean()
-        # total_loss += res_f_reg*1e-2
-        total_loss += res_f_reg * 5e-5
-        # total_loss += res_f_reg*1e-5
+        reg_res_f = res_f.pow(2).mean()
+        total_loss += reg_res_f * 5e-5
 
-        # delta_joint_ref_reg = delta_ja_ref.pow(2).mean()
-        # total_loss += delta_joint_ref_reg*1e-4
-
-        foot_reg = foot_height.pow(2).mean()
+        reg_foot = foot_height.pow(2).mean()
         # total_loss += foot_reg * 1e-4
 
         if total_loss.isnan():
@@ -761,16 +710,12 @@ class phys_model(nn.Module):
 
         loss_dict = {}
         loss_dict["total_loss"] = total_loss
-        loss_dict["loss_root"] = loss_root
-        loss_dict["loss_vel"] = loss_vel
-        loss_dict["loss_root_state"] = loss_root_state
+        loss_dict["loss_traj"] = loss_traj
+        loss_dict["loss_pos_state"] = loss_pos_state
         loss_dict["loss_vel_state"] = loss_vel_state
-        loss_dict["torque_reg"] = torque_reg
-        loss_dict["res_f_reg"] = res_f_reg
-        loss_dict["foot_reg"] = foot_reg
-        # print(self.target_ke)
-        # print(self.target_kd)
-        # print(self.body_mass)
+        loss_dict["loss_reg_torque"] = reg_torque
+        loss_dict["loss_reg_res_f"] = reg_res_f
+        loss_dict["loss_reg_foot"] = reg_foot
 
         return loss_dict
 
@@ -783,11 +728,6 @@ class phys_model(nn.Module):
         x_tsts = []  # target
         com_k = []
         data = {}
-
-        # x_rest = trimesh.Trimesh(self.gtpoints[0]*10, self.faces,
-        #        vertex_colors=self.colors, process=False)
-        # in_bullet=False
-        # use_urdf=False
 
         part_com = self.env.body_com.numpy()[..., None]
         part_mass = self.env.body_mass.numpy()
@@ -803,7 +743,6 @@ class phys_model(nn.Module):
             # get com (simulated)
             com = compute_com(obs, part_com, part_mass)
             com_k.append(compute_com(msm, part_com, part_mass))
-            # x_msm = can2gym2gl(x_rest, msm, in_bullet=in_bullet, use_urdf=use_urdf, use_angle=True)
 
             x_msm = can2gym2gl(x_rest, msm, in_bullet=self.in_bullet, use_urdf=use_urdf)
             x_tst = can2gym2gl(x_rest, tst, in_bullet=self.in_bullet, use_urdf=use_urdf)
@@ -815,7 +754,6 @@ class phys_model(nn.Module):
                 in_bullet=self.in_bullet,
                 use_urdf=use_urdf,
             )
-            # x_sim = can2gym2gl(x_rest, obs, gforce=grf+jaf, in_bullet=self.in_bullet, use_urdf=use_urdf)
 
             x_sims.append(x_sim)
             x_msms.append(x_msm)
@@ -1082,7 +1020,7 @@ class ForwardWarp(torch.autograd.Function):
 
         grad = [wp.to_torch(v) for k, v in ctx.tape.gradients.items()]
         max_grad = torch.cat([i.reshape(-1) for i in grad]).abs().max()
-        print("max grad:", max_grad)
+        # print("max grad:", max_grad)
         if max_grad == 0:
             pdb.set_trace()
 

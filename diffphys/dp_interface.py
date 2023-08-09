@@ -125,7 +125,7 @@ class phys_interface(phys_model):
         self.obj2view_vis = batch["obj2view"][:, self.frame2step].clone()
         self.ks_vis = batch["ks"][:, self.frame2step].clone()
 
-        target_body_q, target_body_qd, msm = self.combine_targets(
+        target_position, target_velocity, self.msm = self.fk_pos_vel(
             target_q, target_ja, target_qd, target_jad
         )
 
@@ -138,17 +138,11 @@ class phys_interface(phys_model):
             res_f,
         ) = self.get_net_pred(steps_fr)
 
-        return (
-            target_body_q,
-            target_body_qd,
-            msm,
-            ref_ja,
-            est_q,
-            est_ja,
-            state_qd,
-            torques,
-            res_f,
+        ref, state_q, state_qd, torques, res_f = self.rearrange_pred(
+            est_q, est_ja, ref_ja, state_qd, torques, res_f
         )
+
+        return target_position, ref, state_q, state_qd, torques, res_f
 
     def get_foot_height(self, state_body_q):
         kp_idxs = [

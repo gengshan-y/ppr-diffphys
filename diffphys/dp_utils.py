@@ -16,6 +16,7 @@ from diffphys.urdf_utils import (
     articulate_robot,
 )
 
+
 def zero_grad_list(paramlist):
     """
     Clears the gradients of all optimized :class:`torch.Tensor`
@@ -24,6 +25,7 @@ def zero_grad_list(paramlist):
         if p.grad is not None:
             p.grad.detach_()
             p.grad.zero_()
+
 
 def remove_nan(q_init_grad, bs):
     """
@@ -76,13 +78,10 @@ def compute_com(body_q, part_com, part_mass):
     return com
 
 
-def clip_loss(loss_seq, th):
+def clip_loss(loss_seq, th=0):
     """
     bs,T
     """
-    # if th==0:
-    #    th=loss_seq.median()*10
-    # clip_val,clip_idx = torch.max(loss_seq>th,1)
     for i in range(len(loss_seq)):
         if th == 0:
             loss_sub = loss_seq[i]
@@ -90,8 +89,6 @@ def clip_loss(loss_seq, th):
         clip_val, clip_idx = torch.max(loss_seq[i] > th, 0)
         if clip_val == 1:
             loss_seq[i, clip_idx:] = 0
-        # if clip_val[i]==1:
-        #    loss_seq[i,clip_idx[i]:] = 0
     if loss_seq.sum() > 0:
         loss_seq = loss_seq[loss_seq > 0].mean()
     else:
@@ -122,10 +119,7 @@ def se3_loss(pred, gt, rot_ratio=0.1):
         rot_gti = dqtorch.quaternion_to_matrix(rot_gti)
     rot_loss = rot_angle(rot_pred @ rot_gti)
 
-    # loss = trn_loss
     loss = 0.1 * trn_loss + 0.1 * rot_loss * rot_ratio
-    # loss = 0.1*trn_loss + 0.01*rot_loss
-    # loss = trn_loss + 0.01*rot_loss
     loss[nanid] = 0
     return loss
 
@@ -147,6 +141,7 @@ def bullet2gl(msm, in_bullet):
     msm["vel"] = (issac_to_gl @ msm["vel"][..., None])[..., 0]
     msm["avel"] = (issac_to_gl @ msm["avel"][..., None])[..., 0]
 
+
 def can2gym2gl(
     x_rest, obs, gforce=None, com=None, in_bullet=False, use_urdf=False, use_angle=False
 ):
@@ -163,4 +158,3 @@ def can2gym2gl(
     else:
         mesh = x_rest.copy()
     return mesh
-
