@@ -7,7 +7,6 @@ import numpy as np
 import scipy.interpolate
 
 from diffphys.dataloader import parse_amp
-from diffphys.torch_utils import NeRF
 from diffphys.robot import URDFRobot
 from diffphys.urdf_utils import articulate_robot_rbrt_batch
 from diffphys.geom_utils import (
@@ -29,6 +28,10 @@ from diffphys.dp_utils import (
     remove_nan,
     bullet2gl,
 )
+
+sys.path.append("%s/../../../../" % os.path.dirname(__file__))
+from lab4d.nnutils.base import ScaleLayer
+from lab4d.nnutils.time import TimeMLP
 
 import warp as wp
 
@@ -199,49 +202,22 @@ class phys_model(nn.Module):
         )
 
     def add_nn_modules(self):
-        self.delta_root_mlp = NeRF(
-            tscale=1.0 / self.gt_steps,
-            N_freqs=6,
-            D=8,
-            W=256,
-            out_channels=6,
-            in_channels_xyz=13,
-        )
+        # msm = self.get_mocap_data(np.arange(self.gt_steps))
+        # target_pos = torch.cuda.FloatTensor(msm["pos"])
+        # target_orn = torch.cuda.FloatTensor(msm["orn"])
+        # rtmat = torch.eye(4)[None].repeat(len(target_orn), 1, 1)
+        # target_orn = target_orn[:, [3, 0, 1, 2]]  # xyzw to wxyz
+        # rtmat[:, :3, :3] = quaternion_to_matrix(target_orn)
+        # rtmat[:, :3, 3] = target_pos
+        # rtmat = rtmat.numpy()
+        # self.root_pose_mlp = CameraMLP(rtmat, D=8, W=256, num_freq_t=6)
 
-        self.vel_mlp = NeRF(
-            tscale=1.0 / self.gt_steps,
-            N_freqs=6,
-            D=8,
-            W=256,
-            out_channels=6 + self.n_dof,
-            in_channels_xyz=13,
-        )
-
-        self.delta_joint_mlp = NeRF(
-            tscale=1.0 / self.gt_steps,
-            N_freqs=6,
-            D=8,
-            W=256,
-            out_channels=self.n_dof,
-            in_channels_xyz=13,
-        )
-
-        self.torque_mlp = NeRF(
-            tscale=1.0 / self.gt_steps,
-            N_freqs=6,
-            D=8,
-            W=256,
-            out_channels=self.n_dof,
-            in_channels_xyz=13,
-        )
-
-        self.residual_f_mlp = NeRF(
-            tscale=1.0 / self.gt_steps,
-            N_freqs=6,
-            D=8,
-            W=256,
-            out_channels=6 * self.n_links,
-            in_channels_xyz=13,
+        self.root_pose_mlp = TimeMLPWarpper(self.gt_steps, out_channels=6)
+        self.joint_angle_mlp = TimeMLPWarpper(self.gt_steps, out_channels=self.n_dof)
+        self.vel_mlp = TimeMLPWarpper(self.gt_steps, out_channels=6 + self.n_dof)
+        self.torque_mlp = TimeMLPWarpper(self.gt_steps, out_channels=self.n_dof)
+        self.residual_f_mlp = TimeMLPWarpper(
+            self.gt_steps, out_channels=6 * self.n_links
         )
 
     def set_progress(self, num_iters):
@@ -345,8 +321,8 @@ class phys_model(nn.Module):
             "body_mass": lr_explicit,
         }
         param_lr_with = {
-            "delta_root_mlp": lr_base,
-            "delta_joint_mlp": lr_base,
+            "root_pose_mlp": lr_base,
+            "joint_angle_mlp": lr_base,
             "vel_mlp": lr_base,
             "torque_mlp": lr_base,
             "residual_f_mlp": lr_base,
@@ -386,7 +362,7 @@ class phys_model(nn.Module):
             self.optimizer,
             lr_list,
             self.total_iters,
-            pct_start=0.02,  # use 2% iters
+            pct_start=0.2,  # use 20% iters
             cycle_momentum=False,
             anneal_strategy="linear",
             final_div_factor=1.0 / 5,
@@ -443,28 +419,31 @@ class phys_model(nn.Module):
         """
         # additional torques
         bs, nstep = steps_fr.shape
-        torques = self.torque_mlp(steps_fr.reshape(-1, 1))
+        torques = self.torque_mlp.get_vals(steps_fr.reshape(-1))
         torques = torch.cat([torch.zeros_like(torques[:, :1].repeat(1, 6)), torques], 1)
         torques = torques.view(bs, nstep, -1)
         torques *= 0
 
         # residual force
-        res_f = self.residual_f_mlp(steps_fr.reshape(-1, 1))
+        res_f = self.residual_f_mlp.get_vals(steps_fr.reshape(-1))
         # res_f = res_f.view(bs, nstep, -1, 6)
         # res_f[..., 3:6] *= 10
         res_f = res_f.view(bs, nstep, -1)
         res_f *= 0
 
         # delta root transoforms: G = Gd G
-        delta_root = self.delta_root_mlp(steps_fr.reshape(-1, 1))
+        # quat, trans = self.root_pose_mlp.get_vals(steps_fr.reshape(-1))
+        # quat = quat[..., [1, 2, 3, 0]] # wxyz => xyzw
+        # delta_root = torch.cat([trans, quat], -1)
+        delta_root = self.root_pose_mlp.get_vals(steps_fr.reshape(-1))
         delta_root = delta_root.view(bs, nstep, -1)
 
         # delta joints from net
-        delta_ja_ref = self.delta_joint_mlp(steps_fr.reshape(-1, 1))
+        delta_ja_ref = self.joint_angle_mlp.get_vals(steps_fr.reshape(-1))
         delta_ja_ref = delta_ja_ref.view(bs, nstep, -1)
 
         # velocity prediction
-        state_qd = self.vel_mlp(steps_fr.reshape(-1, 1))
+        state_qd = self.vel_mlp.get_vals(steps_fr.reshape(-1))
         state_qd = state_qd.view(bs, nstep, -1)
         return torques, delta_root, delta_ja_ref, state_qd, res_f
 
@@ -513,6 +492,12 @@ class phys_model(nn.Module):
         )
         return target_body_q, target_body_qd, msm
 
+    def get_mocap_data(self, steps_fr):
+        amp_info = self.amp_info_func(steps_fr)
+        msm = parse_amp(amp_info)
+        bullet2gl(msm, self.in_bullet)
+        return msm
+
     def get_batch_input(self, steps_fr):
         """
         get mocap data
@@ -521,9 +506,8 @@ class phys_model(nn.Module):
         target_ja:  bs,T,dof
         """
         # pos/orn/ref joints from data
-        amp_info = self.amp_info_func(steps_fr.cpu().numpy())
-        msm = parse_amp(amp_info)
-        bullet2gl(msm, self.in_bullet)
+
+        msm = self.get_mocap_data(steps_fr.cpu().numpy())
         target_ja = torch.cuda.FloatTensor(msm["jang"])
         target_pos = torch.cuda.FloatTensor(msm["pos"])
         target_orn = torch.cuda.FloatTensor(msm["orn"])
@@ -553,6 +537,7 @@ class phys_model(nn.Module):
 
         # refine
         queried_q = self.compose_delta(target_q, delta_q)  # delta x target
+        # queried_q = delta_q  # delta x target
         queried_ja = target_ja + delta_ja
 
         ref_ja, queried_q, queried_qd, torques, res_f = self.rearrange_pred(
@@ -685,6 +670,12 @@ class phys_model(nn.Module):
         reg_foot = foot_height.pow(2).mean()
         total_loss += self.opts["reg_foot_wt"] * reg_foot
         loss_dict["loss_reg_foot"] = reg_foot
+
+        # pdb.set_trace()
+        # reg_root_mlp = se3_loss(
+        #     self.root_pose_mlp.get_vals(steps_fr), target_position
+        # ).mean(-1)
+        # loss_dict["loss_reg_root_mlp"] = reg_root_mlp
 
         if total_loss.isnan():
             pdb.set_trace()
@@ -1077,3 +1068,74 @@ class ForwardWarp(torch.autograd.Function):
             body_mass_grad,
             None,
         )
+
+
+class TimeMLPWarpper(TimeMLP):
+    """Encode arbitrary scalar over time with an MLP
+
+    Args:
+        init_vals: (N,...) initial value of the scalar
+        D (int): Number of linear layers
+        W (int): Number of hidden units in each MLP layer
+        num_freq_t (int): Number of frequencies in time Fourier embedding
+        out_channels (int): Number of output channels
+        skips (List(int)): List of layers to add skip connections at
+        activation (Function): Activation function to use (e.g. nn.ReLU())
+    """
+
+    def __init__(
+        self,
+        num_frames,
+        D=5,
+        W=256,
+        num_freq_t=6,
+        out_channels=1,
+        skips=[4],
+        activation=nn.ReLU(True),
+    ):
+        # create info map for time embedding
+        frame_info = {
+            "frame_offset": np.asarray([0, num_frames]),
+            "frame_mapping": list(range(num_frames)),
+            "frame_offset_raw": np.asarray([0, num_frames]),
+        }
+        # xyz encoding layers
+        super().__init__(
+            frame_info,
+            D=D,
+            W=W,
+            num_freq_t=num_freq_t,
+            skips=skips,
+            activation=activation,
+        )
+
+        # output layers
+        self.head = nn.Sequential(
+            nn.Linear(W, W // 2),
+            activation,
+            nn.Linear(W // 2, out_channels),
+            ScaleLayer(0.1),
+        )
+
+    def forward(self, t_embed):
+        """
+        Args:
+            t_embed: (M, self.W) Input Fourier time embeddings
+        Returns:
+            output: (M, x) Output values
+        """
+        t_feat = super().forward(t_embed)
+        output = self.head(t_feat)
+        return output
+
+    def get_vals(self, frame_id=None):
+        """Compute values at the given frames.
+
+        Args:
+            frame_id: (M,) Frame id. If None, compute values at all frames
+        Returns:
+            output: (M, x) Output values
+        """
+        t_embed = self.time_embedding(frame_id)
+        output = self.forward(t_embed)
+        return output

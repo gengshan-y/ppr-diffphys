@@ -22,10 +22,10 @@ class phys_interface(phys_model):
     def add_nn_modules(self):
         super().add_nn_modules()
         self.kinemtics_proxy = KinemticsProxy(self.object_field, self.scene_field)
-        del self.delta_root_mlp
-        del self.delta_joint_mlp
-        self.delta_root_mlp = lambda x: self.kinemtics_proxy(x)
-        self.delta_joint_mlp = (
+        del self.root_pose_mlp
+        del self.joint_angle_mlp
+        self.root_pose_mlp = lambda x: self.kinemtics_proxy(x)
+        self.joint_angle_mlp = (
             lambda x: self.kinemtics_proxy.object_field.warp.articulation.get_vals(
                 x.long(), return_so3=True
             )
