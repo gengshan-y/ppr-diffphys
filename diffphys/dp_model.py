@@ -29,7 +29,7 @@ from diffphys.dp_utils import (
     remove_nan,
     bullet2gl,
 )
-from diffphys.torch_utils import TimeMLPOld, TimeMLPWarpper
+from diffphys.torch_utils import TimeMLPOld, TimeMLPWrapper, CameraMLPWrapper
 
 import warp as wp
 
@@ -221,34 +221,35 @@ class phys_model(nn.Module):
         )
 
     def add_nn_modules(self):
-        # self.root_pose_mlp = TimeMLPOld(tscale=1.0 / self.gt_steps, out_channels=6)
-        # self.joint_angle_mlp = TimeMLPOld(
-        #     tscale=1.0 / self.gt_steps, out_channels=self.n_dof
-        # )
-        # self.vel_mlp = TimeMLPOld(
-        #     tscale=1.0 / self.gt_steps, out_channels=6 + self.n_dof
-        # )
-        # self.torque_mlp = TimeMLPOld(
-        #     tscale=1.0 / self.gt_steps, out_channels=self.n_dof
-        # )
-        # self.residual_f_mlp = TimeMLPOld(
-        #     tscale=1.0 / self.gt_steps, out_channels=6 * self.n_links
-        # )
+        self.root_pose_mlp = TimeMLPOld(tscale=1.0 / self.gt_steps, out_channels=6)
+        self.joint_angle_mlp = TimeMLPOld(
+            tscale=1.0 / self.gt_steps, out_channels=self.n_dof
+        )
+        self.vel_mlp = TimeMLPOld(
+            tscale=1.0 / self.gt_steps, out_channels=6 + self.n_dof
+        )
+        self.torque_mlp = TimeMLPOld(
+            tscale=1.0 / self.gt_steps, out_channels=self.n_dof
+        )
+        self.residual_f_mlp = TimeMLPOld(
+            tscale=1.0 / self.gt_steps, out_channels=6 * self.n_links
+        )
 
         # msm = self.get_mocap_data(np.arange(self.gt_steps))
         # rtmat = np.eye(4)[None].repeat(self.gt_steps, 0)
         # rtmat[:, :3, :3] = R.from_quat(msm["orn"]).as_matrix()  # xyzw
         # rtmat[:, :3, 3] = msm["pos"]
         # rtmat = rtmat.astype(np.float32)
-        # self.root_pose_mlp = CameraMLP(rtmat)
+        # self.root_pose_mlp = CameraMLPWrapper(rtmat)
+        # self.root_pose_mlp.mlp_init()
 
-        self.root_pose_mlp = TimeMLPWarpper(self.gt_steps, out_channels=6)
-        self.joint_angle_mlp = TimeMLPWarpper(self.gt_steps, out_channels=self.n_dof)
-        self.vel_mlp = TimeMLPWarpper(self.gt_steps, out_channels=6 + self.n_dof)
-        self.torque_mlp = TimeMLPWarpper(self.gt_steps, out_channels=self.n_dof)
-        self.residual_f_mlp = TimeMLPWarpper(
-            self.gt_steps, out_channels=6 * self.n_links
-        )
+        # self.root_pose_mlp = TimeMLPWrapper(self.gt_steps, out_channels=6)
+        # self.joint_angle_mlp = TimeMLPWrapper(self.gt_steps, out_channels=self.n_dof)
+        # self.vel_mlp = TimeMLPWrapper(self.gt_steps, out_channels=6 + self.n_dof)
+        # self.torque_mlp = TimeMLPWrapper(self.gt_steps, out_channels=self.n_dof)
+        # self.residual_f_mlp = TimeMLPWrapper(
+        #     self.gt_steps, out_channels=6 * self.n_links
+        # )
 
     def set_progress(self, num_iters):
         self.progress = num_iters / self.total_iters

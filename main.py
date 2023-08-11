@@ -49,7 +49,6 @@ def main(_):
 
     # model
     model = phys_model(opts, dataloader)
-    # model.root_pose_mlp.mlp_init()
     model.cuda()
 
     # opt
