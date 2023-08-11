@@ -22,9 +22,12 @@ class phys_interface(phys_model):
         self.root_pose_mlp = lambda x: self.kinemtics_proxy(x)
         self.joint_angle_mlp = (
             lambda x: self.kinemtics_proxy.object_field.warp.articulation.get_vals(
-                x.long(), return_so3=True
+                x, return_so3=True
             )
         )
+
+    def init_global_q(self):
+        pass
 
     def get_lr_dict(self):
         """Return the learning rate for each category of trainable parameters
@@ -64,6 +67,7 @@ class phys_interface(phys_model):
     @torch.no_grad()
     def query_kinematics_proxy(self, steps_fr):
         bs, n_fr = steps_fr.shape
+        steps_fr = steps_fr.reshape(-1)
         batch = {}
         batch["target_q"], batch["obj2view"] = pred_est_q(
             steps_fr, self.object_field, self.scene_field
@@ -76,9 +80,10 @@ class phys_interface(phys_model):
         # batch['target_jad']= self.compute_gradient(self.pred_est_ja, steps_fr.clone()) / self.samp_int
         batch["target_qd"] = torch.zeros_like(batch["target_q"])[..., :6]
         batch["target_jad"] = torch.zeros_like(batch["target_ja"])
-        batch["ks"] = self.intrinsics.get_vals(steps_fr.reshape(-1).long()).reshape(
-            bs, n_fr, -1
-        )
+        batch["ks"] = self.intrinsics.get_vals(steps_fr.reshape(-1).long())
+        for k, v in batch.items():
+            shape = v.shape
+            batch[k] = v.reshape((bs, n_fr) + shape[1:])
         return batch
 
     def override_states(self):
@@ -193,7 +198,7 @@ def pred_est_q(steps_fr, object_field, scene_field):
     bs,T
     robot2world = scale(bg2world @ bg2view^-1 @ root2view @ se3)
     """
-    bs, n_fr = steps_fr.shape
+    bs = steps_fr.shape[0]
     data_offset = scene_field.camera_mlp.time_embedding.frame_offset
     vidid, _ = fid_reindex(steps_fr, len(data_offset) - 1, data_offset)
     vidid = vidid.long()
@@ -236,8 +241,8 @@ def pred_est_q(steps_fr, object_field, scene_field):
 
     # rearrange
     urdf_to_world_vec = se3_mat2vec(urdf_to_world)  # xyzw
-    urdf_to_world_vec = urdf_to_world_vec.view(bs, n_fr, -1)
-    urdf_to_view = urdf_to_view.clone().view(bs, n_fr, 4, 4)
+    urdf_to_world_vec = urdf_to_world_vec.view(bs, -1)
+    urdf_to_view = urdf_to_view.clone().view(bs, 4, 4)
     return urdf_to_world_vec, urdf_to_view
 
 
@@ -245,14 +250,14 @@ def pred_est_ja(steps_fr, nerf_body_rts, env, robot):
     """
     bs,T
     """
-    bs, n_fr = steps_fr.shape
+    bs = steps_fr.shape[0]
     data_offset = nerf_body_rts.time_embedding.frame_offset
     inst_id, _ = fid_reindex(steps_fr, len(data_offset) - 1, data_offset)
-    inst_id = inst_id[:, 0].long()
+    inst_id = inst_id.long()
 
     # pred joint angles
     pred_joints = nerf_body_rts.get_vals(steps_fr.reshape(-1).long(), return_so3=True)
-    pred_joints = pred_joints.view(bs, n_fr, -1)
+    pred_joints = pred_joints.view(bs, -1)
 
     # update joint coordinates
     rel_rest_joints = nerf_body_rts.compute_rel_rest_joints(inst_id=inst_id)

@@ -59,12 +59,9 @@ class TimeMLPOld(nn.Module):
         torch.manual_seed(8)  # to reproduce results
         torch.cuda.manual_seed(1)
 
-    def get_vals(self, inx):
+    def forward(self, inx):
         if inx.dim() == 1:
             inx = inx.reshape(-1, 1)
-        return self.forward(inx)
-
-    def forward(self, inx):
         inx = inx * self.tscale
         inx = self.embed(inx)
 
@@ -127,27 +124,17 @@ class TimeMLPWrapper(TimeMLP):
         torch.manual_seed(8)  # to reproduce results
         torch.cuda.manual_seed(1)
 
-    def forward(self, t_embed):
+    def forward(self, frame_id=None):
         """
-        Args:
-            t_embed: (M, self.W) Input Fourier time embeddings
-        Returns:
-            output: (M, x) Output values
-        """
-        t_feat = super().forward(t_embed)
-        output = self.head(t_feat)
-        return output
-
-    def get_vals(self, frame_id=None):
-        """Compute values at the given frames.
-
         Args:
             frame_id: (M,) Frame id. If None, compute values at all frames
         Returns:
             output: (M, x) Output values
         """
         t_embed = self.time_embedding(frame_id)
-        output = self.forward(t_embed)
+
+        t_feat = super().forward(t_embed)
+        output = self.head(t_feat)
         return output
 
 

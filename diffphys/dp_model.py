@@ -31,6 +31,9 @@ from diffphys.dp_utils import (
 )
 from diffphys.torch_utils import TimeMLPOld, TimeMLPWrapper, CameraMLPWrapper
 
+sys.path.append("%s/../../../../" % os.path.dirname(__file__))
+from lab4d.utils.numpy_utils import interp_wt
+
 import warp as wp
 
 wp.init()
@@ -254,6 +257,30 @@ class phys_model(nn.Module):
     def set_progress(self, num_iters):
         self.progress = num_iters / self.total_iters
 
+        # root pose prior wt: steps(0->800, 1->0), range (0,1)
+        loss_name = "reg_cam_prior_wt"
+        anchor_x = (0, 0.5)
+        anchor_y = (1, 0)
+        type = "linear"
+        self.set_loss_weight(loss_name, anchor_x, anchor_y, self.progress, type=type)
+
+    def set_loss_weight(
+        self, loss_name, anchor_x, anchor_y, current_steps, type="linear"
+    ):
+        """Set a loss weight according to the current training step
+
+        Args:
+            loss_name (str): Name of loss weight to set
+            anchor_x: Tuple of optimization steps [x0, x1]
+            anchor_y: Tuple of loss values [y0, y1]
+            current_steps (int): Current optimization step
+            type (str): Interpolation type ("linear" or "log")
+        """
+        if "%s_init" % loss_name not in self.opts.keys():
+            self.opts["%s_init" % loss_name] = self.config[loss_name]
+        factor = interp_wt(anchor_x, anchor_y, current_steps, type=type)
+        self.opts[loss_name] = self.opts["%s_init" % loss_name] * factor
+
     @staticmethod
     def rm_module_prefix(states, prefix="module"):
         new_dict = {}
@@ -453,13 +480,13 @@ class phys_model(nn.Module):
         """
         # additional torques
         bs, nstep = steps_fr.shape
-        torques = self.torque_mlp.get_vals(steps_fr.reshape(-1))
+        torques = self.torque_mlp(steps_fr.reshape(-1))
         torques = torch.cat([torch.zeros_like(torques[:, :1].repeat(1, 6)), torques], 1)
         torques = torques.view(bs, nstep, -1)
         torques *= 0
 
         # residual force
-        res_f = self.residual_f_mlp.get_vals(steps_fr.reshape(-1))
+        res_f = self.residual_f_mlp(steps_fr.reshape(-1))
         # res_f = res_f.view(bs, nstep, -1, 6)
         # res_f[..., 3:6] *= 10
         res_f = res_f.view(bs, nstep, -1)
@@ -469,15 +496,15 @@ class phys_model(nn.Module):
         # quat, trans = self.root_pose_mlp.get_vals(steps_fr.reshape(-1))
         # quat = quat[..., [1, 2, 3, 0]]  # wxyz => xyzw
         # delta_root = torch.cat([trans, quat], -1)
-        delta_root = self.root_pose_mlp.get_vals(steps_fr.reshape(-1))
+        delta_root = self.root_pose_mlp(steps_fr.reshape(-1))
         delta_root = delta_root.view(bs, nstep, -1)
 
         # delta joints from net
-        delta_ja_ref = self.joint_angle_mlp.get_vals(steps_fr.reshape(-1))
+        delta_ja_ref = self.joint_angle_mlp(steps_fr.reshape(-1))
         delta_ja_ref = delta_ja_ref.view(bs, nstep, -1)
 
         # velocity prediction
-        state_qd = self.vel_mlp.get_vals(steps_fr.reshape(-1))
+        state_qd = self.vel_mlp(steps_fr.reshape(-1))
         state_qd = state_qd.view(bs, nstep, -1)
         return torques, delta_root, delta_ja_ref, state_qd, res_f
 
@@ -722,14 +749,6 @@ class phys_model(nn.Module):
 
         return loss_dict
 
-    def set_progress(self):
-        # root pose prior wt: steps(0->800, 1->0), range (0,1)
-        loss_name = "reg_cam_prior_wt"
-        anchor_x = (0, 0.5)
-        anchor_y = (1, 0)
-        type = "linear"
-        self.set_loss_weight(loss_name, anchor_x, anchor_y, self.progress, type=type)
-
     def backward(self, loss):
         loss.backward()
 
@@ -783,7 +802,7 @@ class phys_model(nn.Module):
             # this triggers pyrender
             obj2world = self.target_q_vis[0]
             obj2world = se3_vec2mat(obj2world)
-            world2obj = obj2world.inverse(-1, -2)
+            world2obj = obj2world.inverse()
 
             obj2view = self.obj2view_vis[0]
 
