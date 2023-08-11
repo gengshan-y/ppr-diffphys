@@ -277,7 +277,7 @@ class phys_model(nn.Module):
             type (str): Interpolation type ("linear" or "log")
         """
         if "%s_init" % loss_name not in self.opts.keys():
-            self.opts["%s_init" % loss_name] = self.config[loss_name]
+            self.opts["%s_init" % loss_name] = self.opts[loss_name]
         factor = interp_wt(anchor_x, anchor_y, current_steps, type=type)
         self.opts[loss_name] = self.opts["%s_init" % loss_name] * factor
 
@@ -551,6 +551,7 @@ class phys_model(nn.Module):
         target_q_at_frame = target_q_at_frame.permute(1, 0, 2).contiguous()
         target_qd_at_frame = torch.cat([target_qd, target_jad], -1)
         target_qd_at_frame = target_qd_at_frame.permute(1, 0, 2).contiguous()
+        # get traget body q
         target_body_q, target_body_qd, msm = ForwardKinematics.apply(
             target_q_at_frame, target_qd_at_frame, self
         )
@@ -587,7 +588,7 @@ class phys_model(nn.Module):
         target_q = rotate_frame(self.global_q, target_q)
         target_qd = rotate_frame_vel(self.global_q, target_qd)
 
-        target_position, target_velocity, self.msm = self.fk_pos_vel(
+        target_position, target_velocity, self.target_trajs = self.fk_pos_vel(
             target_q[:, self.frame2step],
             target_ja[:, self.frame2step],
             target_qd[:, self.frame2step],
@@ -689,7 +690,8 @@ class phys_model(nn.Module):
         queried_qd = queried_qd[self.frame2step].reshape(
             self.wdw_length + 1, self.num_envs, -1
         )
-        queried_position, queried_velocity, self.tstate = ForwardKinematics.apply(
+        # get control ref body q
+        queried_position, queried_velocity, self.pid_ref = ForwardKinematics.apply(
             queried_q, queried_qd, self
         )
         foot_height = self.get_foot_height(queried_position)
@@ -763,22 +765,22 @@ class phys_model(nn.Module):
         part_mass = self.env.body_mass.numpy()
         x_rest = self.robot.urdf
         use_urdf = True
-        for frame in range(len(self.obs)):
-            obs = self.obs[frame]
-            msm = self.msm[frame]
-            tst = self.tstate[frame]
+        for frame in range(len(self.sim_trajs)):
+            sim_traj = self.sim_trajs[frame]
+            target_traj = self.target_trajs[frame]
+            pid_ref = self.pid_ref[frame]
             grf = self.grfs[frame]
             jaf = self.jafs[frame]
 
             # get com (simulated)
-            com = compute_com(obs, part_com, part_mass)
-            com_k.append(compute_com(msm, part_com, part_mass))
+            com = compute_com(sim_traj, part_com, part_mass)
+            com_k.append(compute_com(target_traj, part_com, part_mass))
 
-            x_msm = can2gym2gl(x_rest, msm, in_bullet=self.in_bullet, use_urdf=use_urdf)
-            x_tst = can2gym2gl(x_rest, tst, in_bullet=self.in_bullet, use_urdf=use_urdf)
+            x_msm = can2gym2gl(x_rest, target_traj, in_bullet=self.in_bullet, use_urdf=use_urdf)
+            x_tst = can2gym2gl(x_rest, pid_ref, in_bullet=self.in_bullet, use_urdf=use_urdf)
             x_sim = can2gym2gl(
                 x_rest,
-                obs,
+                sim_traj,
                 gforce=grf,
                 com=com,
                 in_bullet=self.in_bullet,
@@ -792,9 +794,9 @@ class phys_model(nn.Module):
         x_msms = np.stack(x_msms, 0)
         x_tsts = np.stack(x_tsts, 0)
 
-        data["xs"] = x_sims
-        data["xgt"] = x_msms
-        data["tst"] = x_tsts
+        data["xs"] = x_sims # simulation
+        data["xgt"] = x_msms # reference trajectory
+        data["tst"] = x_tsts # control target
         data["com_k"] = com_k
 
         if img_size is not None:
@@ -1015,14 +1017,14 @@ class ForwardWarp(torch.autograd.Function):
             # get states
             obs = self.state_steps[0].body_q
             num_coords = obs.shape[0] // self.num_envs
-            self.obs = [obs.numpy()[:num_coords]]
+            self.sim_trajs = [obs.numpy()[:num_coords]]
             wp_pos = [wp.to_torch(obs)]
             wp_vel = [wp.to_torch(self.state_steps[0].body_qd)]
 
             for step in self.frame2step[1:]:
                 # for vis
                 obs = self.state_steps[step + 1].body_q
-                self.obs.append(obs.numpy()[:num_coords])
+                self.sim_trajs.append(obs.numpy()[:num_coords])
                 wp_pos.append(wp.to_torch(obs))
                 wp_vel.append(wp.to_torch(self.state_steps[step + 1].body_qd))
             wp_pos = torch.stack(wp_pos, 0)

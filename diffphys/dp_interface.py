@@ -65,14 +65,14 @@ class phys_interface(phys_model):
         self.skip_factor = self.max_steps // self.gt_steps
 
     @torch.no_grad()
-    def query_kinematics_proxy(self, steps_fr):
+    def query_kinematics_groundtruth(self, steps_fr):
         bs, n_fr = steps_fr.shape
         steps_fr = steps_fr.reshape(-1)
         batch = {}
-        batch["target_q"], batch["obj2view"] = pred_est_q(
+        batch["target_q"], batch["obj2view"] = query_q(
             steps_fr, self.object_field, self.scene_field
         )
-        batch["target_ja"] = pred_est_ja(
+        batch["target_ja"] = query_ja(
             steps_fr, self.object_field.warp.articulation, self.env, self.robot
         )
         # TODO this is problematic due to the discrete root pose
@@ -114,7 +114,7 @@ class phys_interface(phys_model):
         return frame_start
 
     def get_batch_input(self, steps_fr):
-        batch = self.query_kinematics_proxy(steps_fr)
+        batch = self.query_kinematics_groundtruth(steps_fr)
         target_q, target_ja, target_qd, target_jad = (
             batch["target_q"],
             batch["target_ja"],
@@ -125,8 +125,11 @@ class phys_interface(phys_model):
         self.obj2view_vis = batch["obj2view"][:, self.frame2step].clone()
         self.ks_vis = batch["ks"][:, self.frame2step].clone()
 
-        target_position, target_velocity, self.msm = self.fk_pos_vel(
-            target_q, target_ja, target_qd, target_jad
+        target_position, target_velocity, self.target_trajs = self.fk_pos_vel(
+            target_q[:, self.frame2step], 
+            target_ja[:, self.frame2step], 
+            target_qd[:, self.frame2step], 
+            target_jad[:, self.frame2step],
         )
 
         (
@@ -161,10 +164,11 @@ class KinemticsProxy(nn.Module):
         self.scene_field = copy.deepcopy(scene_field)
 
     def forward(self, x):
-        out, _ = pred_est_q(x, self.object_field, self.scene_field)
+        out, _ = query_q(x, self.object_field, self.scene_field)
         return out
 
     def override_states(self, object_field, scene_field):
+        # object_field and scene_field stores the states in the DR cycle
         self.object_field.load_state_dict(object_field.state_dict())
         self.scene_field.load_state_dict(scene_field.state_dict())
 
@@ -187,13 +191,11 @@ class KinemticsProxy(nn.Module):
         #     if diff.norm() > 0:
         #         print(name, diff.norm())
 
-        # pdb.set_trace()
-
         object_field.load_state_dict(self.object_field.state_dict())
         scene_field.load_state_dict(self.scene_field.state_dict())
 
 
-def pred_est_q(steps_fr, object_field, scene_field):
+def query_q(steps_fr, object_field, scene_field):
     """
     bs,T
     robot2world = scale(bg2world @ bg2view^-1 @ root2view @ se3)
@@ -246,7 +248,7 @@ def pred_est_q(steps_fr, object_field, scene_field):
     return urdf_to_world_vec, urdf_to_view
 
 
-def pred_est_ja(steps_fr, nerf_body_rts, env, robot):
+def query_ja(steps_fr, nerf_body_rts, env, robot):
     """
     bs,T
     """
@@ -256,7 +258,7 @@ def pred_est_ja(steps_fr, nerf_body_rts, env, robot):
     inst_id = inst_id.long()
 
     # pred joint angles
-    pred_joints = nerf_body_rts.get_vals(steps_fr.reshape(-1).long(), return_so3=True)
+    pred_joints = nerf_body_rts.get_vals(steps_fr.reshape(-1), return_so3=True)
     pred_joints = pred_joints.view(bs, -1)
 
     # update joint coordinates
