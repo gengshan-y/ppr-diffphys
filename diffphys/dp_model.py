@@ -211,12 +211,23 @@ class phys_model(nn.Module):
         # rtmat = rtmat.astype(np.float32)
         # self.root_pose_mlp = CameraMLP(rtmat)
 
-        self.root_pose_mlp = TimeMLPWarpper(self.gt_steps, out_channels=6)
-        self.joint_angle_mlp = TimeMLPWarpper(self.gt_steps, out_channels=self.n_dof)
-        self.vel_mlp = TimeMLPWarpper(self.gt_steps, out_channels=6 + self.n_dof)
-        self.torque_mlp = TimeMLPWarpper(self.gt_steps, out_channels=self.n_dof)
-        self.residual_f_mlp = TimeMLPWarpper(
-            self.gt_steps, out_channels=6 * self.n_links
+        # self.root_pose_mlp = TimeMLPWarpper(self.gt_steps, out_channels=6)
+        # self.joint_angle_mlp = TimeMLPWarpper(self.gt_steps, out_channels=self.n_dof)
+        # self.vel_mlp = TimeMLPWarpper(self.gt_steps, out_channels=6 + self.n_dof)
+        # self.torque_mlp = TimeMLPWarpper(self.gt_steps, out_channels=self.n_dof)
+        # self.residual_f_mlp = TimeMLPWarpper(
+        #     self.gt_steps, out_channels=6 * self.n_links
+        # )
+        from diffphys.torch_utils import TimeMLP
+
+        self.root_pose_mlp = TimeMLP(tscale=1.0 / self.gt_steps, out_channels=6)
+        self.joint_angle_mlp = TimeMLP(
+            tscale=1.0 / self.gt_steps, out_channels=self.n_dof
+        )
+        self.vel_mlp = TimeMLP(tscale=1.0 / self.gt_steps, out_channels=6 + self.n_dof)
+        self.torque_mlp = TimeMLP(tscale=1.0 / self.gt_steps, out_channels=self.n_dof)
+        self.residual_f_mlp = TimeMLP(
+            tscale=1.0 / self.gt_steps, out_channels=6 * self.n_links
         )
 
     def set_progress(self, num_iters):
