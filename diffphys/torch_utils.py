@@ -92,9 +92,9 @@ class TimeMLPWarpper(TimeMLP):
         W=256,
         num_freq_t=6,
         out_channels=1,
-        skips=[4],
+        skips=[1, 2, 3, 4],
         activation=nn.ReLU(True),
-        output_scale=0.5,
+        output_scale=1.0,
     ):
         # create info map for time embedding
         frame_info = {
@@ -114,9 +114,7 @@ class TimeMLPWarpper(TimeMLP):
 
         # output layers
         self.head = nn.Sequential(
-            nn.Linear(W, W // 2),
-            activation,
-            nn.Linear(W // 2, out_channels),
+            nn.Linear(W, out_channels),
             ScaleLayer(output_scale),
         )
 

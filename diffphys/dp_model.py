@@ -176,27 +176,48 @@ class phys_model(nn.Module):
         # integrator
         self.integrator = SemiImplicitIntegrator()
 
-        # torch parameters
-        self.init_global_q()
-
         self.target_ke = nn.Parameter(
-            torch.cuda.FloatTensor(self.articulation_builder.joint_target_ke)
+            torch.tensor(self.articulation_builder.joint_target_ke, dtype=torch.float32)
         )
         self.target_kd = nn.Parameter(
-            torch.cuda.FloatTensor(self.articulation_builder.joint_target_kd)
+            torch.tensor(self.articulation_builder.joint_target_kd, dtype=torch.float32)
         )
         self.body_mass = nn.Parameter(
-            torch.cuda.FloatTensor(self.articulation_builder.body_mass)
+            torch.tensor(self.articulation_builder.body_mass, dtype=torch.float32)
         )
 
         self.add_nn_modules()
+
+        # torch parameters
+        self.init_global_q()
 
         # optimizer
         self.add_optimizer(opts)
 
     def init_global_q(self):
+        # necessary for fk
+        self.frame2step = [0]
+        self.num_envs = 1
+        builder = wp.sim.ModelBuilder()
+        for i in range(self.num_envs):
+            builder.add_rigid_articulation(self.articulation_builder)
+        self.env = builder.finalize(self.device)
+
+        # mocap data
+        self.global_q = torch.tensor([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0])
+        steps_fr = torch.tensor([[0]])
+
+        _, _, queried_q, queried_qd, _, _ = self.get_batch_input(steps_fr)
+
+        queried_position, _, _ = ForwardKinematics.apply(
+            queried_q[:, None], queried_qd[:, None], self
+        )  # steps, n_env, x
+        foot_height = self.get_foot_height(queried_position)[0, 0]
+
         self.global_q = nn.Parameter(
-            torch.cuda.FloatTensor([0.0, -0.03, 0.0, 0.0, 0.0, 0.0, 1.0])
+            torch.tensor(
+                [0.0, -foot_height, 0.0, 0.0, 0.0, 0.0, 1.0], dtype=torch.float32
+            )
         )
 
     def add_nn_modules(self):
@@ -494,10 +515,13 @@ class phys_model(nn.Module):
         return frame_start
 
     def fk_pos_vel(self, target_q, target_ja, target_qd, target_jad):
+        """
+        In: nenv, step, dof
+        """
         # combine targets
-        target_q_at_frame = torch.cat([target_q, target_ja], -1)[:, self.frame2step]
+        target_q_at_frame = torch.cat([target_q, target_ja], -1)
         target_q_at_frame = target_q_at_frame.permute(1, 0, 2).contiguous()
-        target_qd_at_frame = torch.cat([target_qd, target_jad], -1)[:, self.frame2step]
+        target_qd_at_frame = torch.cat([target_qd, target_jad], -1)
         target_qd_at_frame = target_qd_at_frame.permute(1, 0, 2).contiguous()
         target_body_q, target_body_qd, msm = ForwardKinematics.apply(
             target_q_at_frame, target_qd_at_frame, self
@@ -518,14 +542,15 @@ class phys_model(nn.Module):
         target_ja:  bs,T,dof
         """
         # pos/orn/ref joints from data
+        device = steps_fr.device
 
         msm = self.get_mocap_data(steps_fr.cpu().numpy())
-        target_ja = torch.cuda.FloatTensor(msm["jang"])
-        target_pos = torch.cuda.FloatTensor(msm["pos"])
-        target_orn = torch.cuda.FloatTensor(msm["orn"])
-        target_jad = torch.cuda.FloatTensor(msm["jvel"])
-        target_vel = torch.cuda.FloatTensor(msm["vel"])
-        target_avel = torch.cuda.FloatTensor(msm["avel"])
+        target_ja = torch.tensor(msm["jang"], dtype=torch.float32, device=device)
+        target_pos = torch.tensor(msm["pos"], dtype=torch.float32, device=device)
+        target_orn = torch.tensor(msm["orn"], dtype=torch.float32, device=device)
+        target_jad = torch.tensor(msm["jvel"], dtype=torch.float32, device=device)
+        target_vel = torch.tensor(msm["vel"], dtype=torch.float32, device=device)
+        target_avel = torch.tensor(msm["avel"], dtype=torch.float32, device=device)
 
         target_q = torch.cat([target_pos[..., :], target_orn[..., :]], -1)  # bs, T, 7
         target_qd = torch.cat([target_vel[..., :], target_avel[..., :]], -1)  # bs, T, 6
@@ -535,7 +560,10 @@ class phys_model(nn.Module):
         target_qd = rotate_frame_vel(self.global_q, target_qd)
 
         target_position, target_velocity, self.msm = self.fk_pos_vel(
-            target_q, target_ja, target_qd, target_jad
+            target_q[:, self.frame2step],
+            target_ja[:, self.frame2step],
+            target_qd[:, self.frame2step],
+            target_jad[:, self.frame2step],
         )
 
         # get network outputs
@@ -784,6 +812,13 @@ class ForwardKinematics(torch.autograd.Function):
         rj_q:  T, bs, 7+B
         rj_qd: T, bs, 6+B / none
         """
+        if rj_q.is_cuda:
+            is_cuda = True
+        else:
+            is_cuda = False
+            rj_q = rj_q.cuda()
+            rj_qd = rj_qd.cuda()
+
         nfr, bs, ndof = rj_q.shape
         # save variables
         ctx.self = self
@@ -803,7 +838,7 @@ class ForwardKinematics(torch.autograd.Function):
             ctx.rj_q.append(wp.from_torch(rj_q[it]))
             # qd
             if rj_qd is None:
-                rj_qd_sub = torch.cuda.FloatTensor(np.zeros(bs * (ndof - 1)))
+                rj_qd_sub = torch.tensor(np.zeros(bs * (ndof - 1)), device=rj_q.device)
             else:
                 rj_qd_sub = rj_qd[it]
             rj_qd_sub = wp.from_torch(rj_qd_sub)
@@ -829,6 +864,11 @@ class ForwardKinematics(torch.autograd.Function):
                 body_qd.append(body_qd_sub)
             body_q = torch.stack(body_q, 1)  # bs,T,dofs,7
             body_qd = torch.stack(body_qd, 1)
+
+        if not is_cuda:
+            body_q = body_q.cpu()
+            body_qd = body_qd.cpu()
+
         return body_q, body_qd, msm
 
     @staticmethod

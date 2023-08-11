@@ -14,11 +14,6 @@ class phys_interface(phys_model):
     def __init__(self, opts, dataloader, dt=5e-4, device="cuda"):
         super(phys_interface, self).__init__(opts, dataloader, dt, device)
 
-    def init_global_q(self):
-        self.global_q = nn.Parameter(
-            torch.cuda.FloatTensor([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0])
-        )
-
     def add_nn_modules(self):
         super().add_nn_modules()
         self.kinemtics_proxy = KinemticsProxy(self.object_field, self.scene_field)
