@@ -29,11 +29,7 @@ from diffphys.dp_utils import (
     remove_nan,
     bullet2gl,
 )
-
-sys.path.append("%s/../../../../" % os.path.dirname(__file__))
-from lab4d.nnutils.base import ScaleLayer
-from lab4d.nnutils.time import TimeMLP
-from lab4d.nnutils.pose import CameraMLP
+from diffphys.torch_utils import TimeMLPOld, TimeMLPWarpper
 
 import warp as wp
 
@@ -204,6 +200,20 @@ class phys_model(nn.Module):
         )
 
     def add_nn_modules(self):
+        # self.root_pose_mlp = TimeMLPOld(tscale=1.0 / self.gt_steps, out_channels=6)
+        # self.joint_angle_mlp = TimeMLPOld(
+        #     tscale=1.0 / self.gt_steps, out_channels=self.n_dof
+        # )
+        # self.vel_mlp = TimeMLPOld(
+        #     tscale=1.0 / self.gt_steps, out_channels=6 + self.n_dof
+        # )
+        # self.torque_mlp = TimeMLPOld(
+        #     tscale=1.0 / self.gt_steps, out_channels=self.n_dof
+        # )
+        # self.residual_f_mlp = TimeMLPOld(
+        #     tscale=1.0 / self.gt_steps, out_channels=6 * self.n_links
+        # )
+
         # msm = self.get_mocap_data(np.arange(self.gt_steps))
         # rtmat = np.eye(4)[None].repeat(self.gt_steps, 0)
         # rtmat[:, :3, :3] = R.from_quat(msm["orn"]).as_matrix()  # xyzw
@@ -211,23 +221,12 @@ class phys_model(nn.Module):
         # rtmat = rtmat.astype(np.float32)
         # self.root_pose_mlp = CameraMLP(rtmat)
 
-        # self.root_pose_mlp = TimeMLPWarpper(self.gt_steps, out_channels=6)
-        # self.joint_angle_mlp = TimeMLPWarpper(self.gt_steps, out_channels=self.n_dof)
-        # self.vel_mlp = TimeMLPWarpper(self.gt_steps, out_channels=6 + self.n_dof)
-        # self.torque_mlp = TimeMLPWarpper(self.gt_steps, out_channels=self.n_dof)
-        # self.residual_f_mlp = TimeMLPWarpper(
-        #     self.gt_steps, out_channels=6 * self.n_links
-        # )
-        from diffphys.torch_utils import TimeMLP
-
-        self.root_pose_mlp = TimeMLP(tscale=1.0 / self.gt_steps, out_channels=6)
-        self.joint_angle_mlp = TimeMLP(
-            tscale=1.0 / self.gt_steps, out_channels=self.n_dof
-        )
-        self.vel_mlp = TimeMLP(tscale=1.0 / self.gt_steps, out_channels=6 + self.n_dof)
-        self.torque_mlp = TimeMLP(tscale=1.0 / self.gt_steps, out_channels=self.n_dof)
-        self.residual_f_mlp = TimeMLP(
-            tscale=1.0 / self.gt_steps, out_channels=6 * self.n_links
+        self.root_pose_mlp = TimeMLPWarpper(self.gt_steps, out_channels=6)
+        self.joint_angle_mlp = TimeMLPWarpper(self.gt_steps, out_channels=self.n_dof)
+        self.vel_mlp = TimeMLPWarpper(self.gt_steps, out_channels=6 + self.n_dof)
+        self.torque_mlp = TimeMLPWarpper(self.gt_steps, out_channels=self.n_dof)
+        self.residual_f_mlp = TimeMLPWarpper(
+            self.gt_steps, out_channels=6 * self.n_links
         )
 
     def set_progress(self, num_iters):
@@ -1084,75 +1083,3 @@ class ForwardWarp(torch.autograd.Function):
             body_mass_grad,
             None,
         )
-
-
-class TimeMLPWarpper(TimeMLP):
-    """Encode arbitrary scalar over time with an MLP
-
-    Args:
-        init_vals: (N,...) initial value of the scalar
-        D (int): Number of linear layers
-        W (int): Number of hidden units in each MLP layer
-        num_freq_t (int): Number of frequencies in time Fourier embedding
-        out_channels (int): Number of output channels
-        skips (List(int)): List of layers to add skip connections at
-        activation (Function): Activation function to use (e.g. nn.ReLU())
-    """
-
-    def __init__(
-        self,
-        num_frames,
-        D=5,
-        W=256,
-        num_freq_t=6,
-        out_channels=1,
-        skips=[4],
-        activation=nn.ReLU(True),
-        output_scale=0.3,
-    ):
-        # create info map for time embedding
-        frame_info = {
-            "frame_offset": np.asarray([0, num_frames]),
-            "frame_mapping": list(range(num_frames)),
-            "frame_offset_raw": np.asarray([0, num_frames]),
-        }
-        # xyz encoding layers
-        super().__init__(
-            frame_info,
-            D=D,
-            W=W,
-            num_freq_t=num_freq_t,
-            skips=skips,
-            activation=activation,
-        )
-
-        # output layers
-        self.head = nn.Sequential(
-            nn.Linear(W, W // 2),
-            activation,
-            nn.Linear(W // 2, out_channels),
-            ScaleLayer(output_scale),
-        )
-
-    def forward(self, t_embed):
-        """
-        Args:
-            t_embed: (M, self.W) Input Fourier time embeddings
-        Returns:
-            output: (M, x) Output values
-        """
-        t_feat = super().forward(t_embed)
-        output = self.head(t_feat)
-        return output
-
-    def get_vals(self, frame_id=None):
-        """Compute values at the given frames.
-
-        Args:
-            frame_id: (M,) Frame id. If None, compute values at all frames
-        Returns:
-            output: (M, x) Output values
-        """
-        t_embed = self.time_embedding(frame_id)
-        output = self.forward(t_embed)
-        return output
