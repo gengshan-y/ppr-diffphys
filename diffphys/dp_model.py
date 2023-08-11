@@ -5,6 +5,7 @@ import torch.nn as nn
 import pdb
 import numpy as np
 import scipy.interpolate
+from scipy.spatial.transform import Rotation as R
 
 from diffphys.dataloader import parse_amp
 from diffphys.robot import URDFRobot
@@ -32,6 +33,7 @@ from diffphys.dp_utils import (
 sys.path.append("%s/../../../../" % os.path.dirname(__file__))
 from lab4d.nnutils.base import ScaleLayer
 from lab4d.nnutils.time import TimeMLP
+from lab4d.nnutils.pose import CameraMLP
 
 import warp as wp
 
@@ -203,14 +205,11 @@ class phys_model(nn.Module):
 
     def add_nn_modules(self):
         # msm = self.get_mocap_data(np.arange(self.gt_steps))
-        # target_pos = torch.cuda.FloatTensor(msm["pos"])
-        # target_orn = torch.cuda.FloatTensor(msm["orn"])
-        # rtmat = torch.eye(4)[None].repeat(len(target_orn), 1, 1)
-        # target_orn = target_orn[:, [3, 0, 1, 2]]  # xyzw to wxyz
-        # rtmat[:, :3, :3] = quaternion_to_matrix(target_orn)
-        # rtmat[:, :3, 3] = target_pos
-        # rtmat = rtmat.numpy()
-        # self.root_pose_mlp = CameraMLP(rtmat, D=8, W=256, num_freq_t=6)
+        # rtmat = np.eye(4)[None].repeat(self.gt_steps, 0)
+        # rtmat[:, :3, :3] = R.from_quat(msm["orn"]).as_matrix()  # xyzw
+        # rtmat[:, :3, 3] = msm["pos"]
+        # rtmat = rtmat.astype(np.float32)
+        # self.root_pose_mlp = CameraMLP(rtmat)
 
         self.root_pose_mlp = TimeMLPWarpper(self.gt_steps, out_channels=6)
         self.joint_angle_mlp = TimeMLPWarpper(self.gt_steps, out_channels=self.n_dof)
@@ -310,7 +309,7 @@ class phys_model(nn.Module):
         # define a dict for (tensor_name, learning) pair
         opts = self.opts
         lr_base = opts["learning_rate"]
-        lr_explicit = lr_base * 20
+        lr_explicit = lr_base * 10
 
         param_lr_startwith = {
             "global_q": lr_explicit,
@@ -319,13 +318,14 @@ class phys_model(nn.Module):
             "attach_ke": lr_explicit,
             "attach_kd": lr_explicit,
             "body_mass": lr_explicit,
-        }
-        param_lr_with = {
             "root_pose_mlp": lr_base,
             "joint_angle_mlp": lr_base,
             "vel_mlp": lr_base,
             "torque_mlp": lr_base,
             "residual_f_mlp": lr_base,
+        }
+        param_lr_with = {
+            ".base_quat": lr_explicit,
         }
         return param_lr_startwith, param_lr_with
 
@@ -356,7 +356,9 @@ class phys_model(nn.Module):
                 if get_local_rank() == 0:
                     print(name, "not found")
 
-        self.optimizer = torch.optim.AdamW(params_list, lr=opts["learning_rate"])
+        self.optimizer = torch.optim.AdamW(
+            params_list, lr=opts["learning_rate"], weight_decay=1e-4
+        )
 
         self.scheduler = torch.optim.lr_scheduler.OneCycleLR(
             self.optimizer,
@@ -365,7 +367,7 @@ class phys_model(nn.Module):
             pct_start=0.2,  # use 20% iters
             cycle_momentum=False,
             anneal_strategy="linear",
-            final_div_factor=1.0 / 5,
+            final_div_factor=1.0,
             div_factor=25,
         )
 
@@ -431,9 +433,9 @@ class phys_model(nn.Module):
         res_f = res_f.view(bs, nstep, -1)
         res_f *= 0
 
-        # delta root transoforms: G = Gd G
+        # root pose
         # quat, trans = self.root_pose_mlp.get_vals(steps_fr.reshape(-1))
-        # quat = quat[..., [1, 2, 3, 0]] # wxyz => xyzw
+        # quat = quat[..., [1, 2, 3, 0]]  # wxyz => xyzw
         # delta_root = torch.cat([trans, quat], -1)
         delta_root = self.root_pose_mlp.get_vals(steps_fr.reshape(-1))
         delta_root = delta_root.view(bs, nstep, -1)
@@ -637,54 +639,57 @@ class phys_model(nn.Module):
             self.wdw_length + 1, self.num_envs, -1, 6
         ).permute(1, 0, 2, 3)
 
-        total_loss = 0
         loss_dict = {}
         # targeting loss
         loss_traj = se3_loss(sim_position, target_position).mean(-1)
         loss_traj[outseq_idx] = 0
-        loss_traj = clip_loss(loss_traj)
-        total_loss += self.opts["traj_wt"] * loss_traj
-        loss_dict["loss_traj"] = loss_traj
+        loss_dict["traj"] = clip_loss(loss_traj)
 
-        # regularization
+        # queried state matching loss
         loss_pos_state = se3_loss(queried_position, sim_position).mean(-1)[:, 1:]
         loss_pos_state[outseq_idx[:, 1:]] = 0
-        loss_pos_state = clip_loss(loss_pos_state)
-        total_loss += self.opts["reg_pose_state_wt"] * loss_pos_state
-        loss_dict["loss_pos_state"] = loss_pos_state
+        loss_dict["pos_state"] = clip_loss(loss_pos_state)
 
         loss_vel_state = se3_loss(queried_velocity, sim_velocity).mean(-1)[:, 1:]
         loss_vel_state[outseq_idx[:, 1:]] = 0
-        loss_vel_state = clip_loss(loss_vel_state)
-        total_loss += self.opts["reg_vel_state_wt"] * loss_vel_state
-        loss_dict["loss_vel_state"] = loss_vel_state
+        loss_dict["vel_state"] = clip_loss(loss_vel_state)
 
-        reg_torque = torques.pow(2).mean()
-        total_loss += self.opts["reg_torque_wt"] * reg_torque
-        loss_dict["loss_reg_torque"] = reg_torque
+        # regularization
+        loss_dict["reg_torque"] = torques.pow(2).mean()
+        loss_dict["reg_res_f"] = res_f.pow(2).mean()
+        loss_dict["reg_foot"] = foot_height.pow(2).mean()
+        # loss_dict["reg_root"] = self.root_pose_mlp.compute_distance_to_prior()
 
-        reg_res_f = res_f.pow(2).mean()
-        total_loss += self.opts["reg_res_f_wt"] * reg_res_f
-        loss_dict["loss_reg_res_f"] = reg_res_f
+        # modify weights
+        # self.set_progress(self)
 
-        reg_foot = foot_height.pow(2).mean()
-        total_loss += self.opts["reg_foot_wt"] * reg_foot
-        loss_dict["loss_reg_foot"] = reg_foot
+        # weight loss
+        total_loss = 0
+        for k, v in loss_dict.items():
+            loss_dict[k] = v * self.opts[k + "_wt"]
+            total_loss += loss_dict[k]
 
-        # pdb.set_trace()
-        # reg_root_mlp = se3_loss(
-        #     self.root_pose_mlp.get_vals(steps_fr), target_position
-        # ).mean(-1)
-        # loss_dict["loss_reg_root_mlp"] = reg_root_mlp
+        # rename keys
+        new_loss_dict = {}
+        for k, v in loss_dict.items():
+            new_loss_dict["loss_" + k] = v
+        loss_dict = new_loss_dict
 
         if total_loss.isnan():
             pdb.set_trace()
 
-        # loss
         print("loss: %.4f / fw time: %.2f s" % (total_loss.cpu(), time.time() - beg))
         loss_dict["total_loss"] = total_loss
 
         return loss_dict
+
+    def set_progress(self):
+        # root pose prior wt: steps(0->800, 1->0), range (0,1)
+        loss_name = "reg_cam_prior_wt"
+        anchor_x = (0, 0.5)
+        anchor_y = (1, 0)
+        type = "linear"
+        self.set_loss_weight(loss_name, anchor_x, anchor_y, self.progress, type=type)
 
     def backward(self, loss):
         loss.backward()
@@ -1092,6 +1097,7 @@ class TimeMLPWarpper(TimeMLP):
         out_channels=1,
         skips=[4],
         activation=nn.ReLU(True),
+        output_scale=0.3,
     ):
         # create info map for time embedding
         frame_info = {
@@ -1114,7 +1120,7 @@ class TimeMLPWarpper(TimeMLP):
             nn.Linear(W, W // 2),
             activation,
             nn.Linear(W // 2, out_channels),
-            ScaleLayer(0.1),
+            ScaleLayer(output_scale),
         )
 
     def forward(self, t_embed):
