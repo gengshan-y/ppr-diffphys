@@ -14,8 +14,22 @@ class phys_interface(phys_model):
     def __init__(self, opts, dataloader, dt=5e-4, device="cuda"):
         super(phys_interface, self).__init__(opts, dataloader, dt, device)
 
+    def preset_data(self, model_dict):
+        # not optimized except for the scale
+        self.scene_field = model_dict["scene_field"]
+        self.object_field = model_dict["object_field"]
+        self.intrinsics = model_dict["intrinsics"]
+
+        self.data_offset = self.scene_field.camera_mlp.time_embedding.frame_offset
+        self.samp_int = 1.0 / 30
+        self.gt_steps = self.data_offset[-1] - 1
+        self.gt_steps_visible = self.gt_steps
+        self.max_steps = int(self.samp_int * self.gt_steps / self.dt)
+        self.skip_factor = self.max_steps // self.gt_steps
+
     def add_nn_modules(self):
         super().add_nn_modules()
+        # optimized
         self.kinemtics_proxy = KinemticsProxy(self.object_field, self.scene_field)
         del self.root_pose_mlp
         del self.joint_angle_mlp
@@ -39,11 +53,29 @@ class phys_interface(phys_model):
         # define a dict for (tensor_name, learning) pair
         opts = self.opts
         lr_base = opts["learning_rate"]
+        lr_explicit = lr_base * 10
+        lr_zero = 0.0
 
         param_lr_startwith, param_lr_with = super().get_lr_dict()
         param_lr_startwith.update(
             {
+                "object_field": lr_zero,
+                "scene_field": lr_zero,
+                "intrinsics": lr_zero,
                 "kinemtics_proxy": lr_base,
+            }
+        )
+        param_lr_with.update(
+            {
+                # "kinemtics_proxy.object_field.logscale": lr_explicit,
+                "kinemtics_proxy.object_field.camera_mlp.base_quat": lr_explicit,
+                "kinemtics_proxy.object_field.warp.articulation.logscale": lr_explicit,
+                "kinemtics_proxy.object_field.warp.articulation.shift": lr_explicit,
+                "kinemtics_proxy.object_field.warp.articulation.orient": lr_explicit,
+                # "kinemtics_proxy.scene_field.logscale": lr_explicit,
+                "kinemtics_proxy.scene_field.camera_mlp.base_quat": lr_explicit,
+                "object_field.logscale": lr_explicit,
+                "scene_field.logscale": lr_explicit,
             }
         )
         return param_lr_startwith, param_lr_with
@@ -52,19 +84,6 @@ class phys_interface(phys_model):
         super().reinit_envs(num_envs, wdw_length, is_eval, overwrite)
         self.env.gravity[1] = -5.0
 
-    def preset_data(self, model_dict):
-        self.scene_field = model_dict["scene_field"]
-        self.object_field = model_dict["object_field"]
-        self.intrinsics = model_dict["intrinsics"]
-
-        self.data_offset = self.scene_field.camera_mlp.time_embedding.frame_offset
-        self.samp_int = 1.0 / 30
-        self.gt_steps = self.data_offset[-1] - 1
-        self.gt_steps_visible = self.gt_steps
-        self.max_steps = int(self.samp_int * self.gt_steps / self.dt)
-        self.skip_factor = self.max_steps // self.gt_steps
-
-    @torch.no_grad()
     def query_kinematics_groundtruth(self, steps_fr):
         bs, n_fr = steps_fr.shape
         steps_fr = steps_fr.reshape(-1)
@@ -72,18 +91,19 @@ class phys_interface(phys_model):
         batch["target_q"], batch["obj2view"] = query_q(
             steps_fr, self.object_field, self.scene_field
         )
-        batch["target_ja"] = query_ja(
-            steps_fr, self.object_field.warp.articulation, self.env, self.robot
-        )
-        # TODO this is problematic due to the discrete root pose
-        # batch['target_qd'] = self.compute_gradient(self.pred_est_q,  steps_fr.clone()) / self.samp_int
-        # batch['target_jad']= self.compute_gradient(self.pred_est_ja, steps_fr.clone()) / self.samp_int
-        batch["target_qd"] = torch.zeros_like(batch["target_q"])[..., :6]
-        batch["target_jad"] = torch.zeros_like(batch["target_ja"])
-        batch["ks"] = self.intrinsics.get_vals(steps_fr.reshape(-1).long())
-        for k, v in batch.items():
-            shape = v.shape
-            batch[k] = v.reshape((bs, n_fr) + shape[1:])
+        with torch.no_grad():
+            batch["target_ja"] = query_ja(
+                steps_fr, self.object_field.warp.articulation, self.env, self.robot
+            )
+            # TODO this is problematic due to the discrete root pose
+            # batch['target_qd'] = self.compute_gradient(self.pred_est_q,  steps_fr.clone()) / self.samp_int
+            # batch['target_jad']= self.compute_gradient(self.pred_est_ja, steps_fr.clone()) / self.samp_int
+            batch["target_qd"] = torch.zeros_like(batch["target_q"])[..., :6]
+            batch["target_jad"] = torch.zeros_like(batch["target_ja"])
+            batch["ks"] = self.intrinsics.get_vals(steps_fr.reshape(-1).long())
+            for k, v in batch.items():
+                shape = v.shape
+                batch[k] = v.reshape((bs, n_fr) + shape[1:])
         return batch
 
     def override_states(self):
