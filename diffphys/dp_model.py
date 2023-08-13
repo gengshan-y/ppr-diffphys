@@ -384,7 +384,7 @@ class phys_model(nn.Module):
             "residual_f_mlp": lr_base,
         }
         param_lr_with = {
-            ".base_quat": lr_explicit,
+            "root_pose_mlp.base_quat": lr_explicit,
         }
         return param_lr_startwith, param_lr_with
 
@@ -776,8 +776,12 @@ class phys_model(nn.Module):
             com = compute_com(sim_traj, part_com, part_mass)
             com_k.append(compute_com(target_traj, part_com, part_mass))
 
-            x_msm = can2gym2gl(x_rest, target_traj, in_bullet=self.in_bullet, use_urdf=use_urdf)
-            x_tst = can2gym2gl(x_rest, pid_ref, in_bullet=self.in_bullet, use_urdf=use_urdf)
+            x_msm = can2gym2gl(
+                x_rest, target_traj, in_bullet=self.in_bullet, use_urdf=use_urdf
+            )
+            x_tst = can2gym2gl(
+                x_rest, pid_ref, in_bullet=self.in_bullet, use_urdf=use_urdf
+            )
             x_sim = can2gym2gl(
                 x_rest,
                 sim_traj,
@@ -794,9 +798,9 @@ class phys_model(nn.Module):
         x_msms = np.stack(x_msms, 0)
         x_tsts = np.stack(x_tsts, 0)
 
-        data["xs"] = x_sims # simulation
-        data["xgt"] = x_msms # reference trajectory
-        data["tst"] = x_tsts # control target
+        data["xs"] = x_sims  # simulation
+        data["xgt"] = x_msms  # reference trajectory
+        data["tst"] = x_tsts  # control target
         data["com_k"] = com_k
 
         if img_size is not None:
@@ -809,7 +813,7 @@ class phys_model(nn.Module):
             obj2view = self.obj2view_vis[0]
 
             world2view = obj2view @ world2obj
-            data["camera"] = world2view.cpu().numpy()
+            data["camera"] = world2view.detach().cpu().numpy()
             data["camera"][:, 3] = self.ks_vis[0].cpu().numpy()
             data["img_size"] = img_size
         return data
@@ -918,6 +922,8 @@ class ForwardKinematics(torch.autograd.Function):
             rj_q_grad = rj_q_grad.view(-1, ctx.bs, ctx.ndof)
             rj_q_grad[rj_q_grad.isnan()] = 0
             rj_q_grad[rj_q_grad > 1] = 1
+            if rj_q_grad.isnan().sum() > 0:
+                pdb.set_trace()
         else:
             rj_q_grad = None
 
@@ -929,13 +935,11 @@ class ForwardKinematics(torch.autograd.Function):
             rj_qd_grad = rj_qd_grad.view(-1, ctx.bs, ctx.ndof - 1)
             rj_qd_grad[rj_qd_grad.isnan()] = 0
             rj_qd_grad[rj_qd_grad > 1] = 1
+            if rj_qd_grad.isnan().sum() > 0:
+                pdb.set_trace()
         else:
             rj_qd_grad = None
 
-        if rj_q_grad.isnan().sum() > 0:
-            pdb.set_trace()
-        if rj_qd_grad.isnan().sum() > 0:
-            pdb.set_trace()
         ctx.tape.zero()
         return (rj_q_grad, rj_qd_grad, None)
 
