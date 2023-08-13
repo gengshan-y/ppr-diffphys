@@ -22,7 +22,7 @@ class Logger:
         self.save_dir = os.path.join(opts["logroot"], logname)
         self.log = SummaryWriter(self.save_dir, comment=opts["logname"])
 
-    def show(self, tag, data):
+    def show(self, tag, data, fps=10):
         """
         xs: mesh
         xgt: mesh
@@ -127,6 +127,7 @@ class Logger:
                 frames,
                 suffix=".mp4",
                 upsample_frame=0,
+                fps=fps,
             )
         # TODO save to gltf (given bones etc.)
 

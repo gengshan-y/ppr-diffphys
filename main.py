@@ -64,7 +64,7 @@ def main(_):
             model.reinit_envs(1, wdw_length=model.gt_steps, is_eval=True)
             model.forward()
             data = model.query()
-            vis.show(it, data)
+            vis.show(it, data, fps=1.0 / model.samp_int)
 
             # training
             # model.reinit_envs(100, wdw_length=1,is_eval=False)

@@ -58,7 +58,7 @@ class phys_interface(phys_model):
         self.intrinsics = model_dict["intrinsics"]
 
         self.data_offset = self.scene_field.camera_mlp.time_embedding.frame_offset
-        self.samp_int = 0.1
+        self.samp_int = 1.0 / 30
         self.gt_steps = self.data_offset[-1] - 1
         self.gt_steps_visible = self.gt_steps
         self.max_steps = int(self.samp_int * self.gt_steps / self.dt)
@@ -126,9 +126,9 @@ class phys_interface(phys_model):
         self.ks_vis = batch["ks"][:, self.frame2step].clone()
 
         target_position, target_velocity, self.target_trajs = self.fk_pos_vel(
-            target_q[:, self.frame2step], 
-            target_ja[:, self.frame2step], 
-            target_qd[:, self.frame2step], 
+            target_q[:, self.frame2step],
+            target_ja[:, self.frame2step],
+            target_qd[:, self.frame2step],
             target_jad[:, self.frame2step],
         )
 
