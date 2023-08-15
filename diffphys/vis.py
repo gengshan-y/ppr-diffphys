@@ -24,8 +24,8 @@ class Logger:
 
     def show(self, tag, data, fps=10):
         """
-        xs: mesh
-        xgt: mesh
+        sim_traj: mesh
+        target_traj: mesh
         vs: values
         as: values
         err: values
@@ -35,7 +35,7 @@ class Logger:
             tag = "%05d" % tag
 
         # create window
-        self.rendered_imgs = {"ref": [], "target": [], "sim": []}
+        self.rendered_imgs = {"target": [], "control_ref": [], "sim": []}
         if "vs" in data.keys():
             self.rendered_imgs["vs"] = []
         if "as" in data.keys():
@@ -55,7 +55,7 @@ class Logger:
         self.renderer = pyrender.OffscreenRenderer(img_size[0], img_size[1])
 
         # loop over data
-        n_frm = len(data["xs"])
+        n_frm = len(data["sim_traj"])
         for frame in range(n_frm):
             # self.caption.text("iter:%s, frame:%04d" % (tag, frame))
             if "camera" in data.keys():
@@ -77,21 +77,21 @@ class Logger:
             camera = {"rtk": rtk}
 
             # gt mesh
-            img = self.render_wdw(data["xgt"][frame], camera=camera)
-            self.rendered_imgs["ref"].append(img)
-
-            # target
-            img = self.render_wdw(data["tst"][frame], camera=camera)
+            img = self.render_wdw(data["target_traj"][frame], camera=camera)
             self.rendered_imgs["target"].append(img)
 
+            # control reference
+            img = self.render_wdw(data["control_ref"][frame], camera=camera)
+            self.rendered_imgs["control_ref"].append(img)
+
             # simulated
-            img = self.render_wdw(data["xs"][frame], camera=camera)
+            img = self.render_wdw(data["sim_traj"][frame], camera=camera)
             self.rendered_imgs["sim"].append(img)
 
             # error
             if "err" in data.keys():
                 img = self.render_wdw(
-                    data["xs"][frame],
+                    data["sim_traj"][frame],
                     val=data["err"][frame],
                     val_max=0.1,
                     camera=camera,
@@ -101,13 +101,19 @@ class Logger:
             # acceleration
             if "as" in data.keys():
                 img = self.render_wdw(
-                    data["xs"][frame], val=data["as"][frame], val_max=2, camera=camera
+                    data["sim_traj"][frame],
+                    val=data["as"][frame],
+                    val_max=2,
+                    camera=camera,
                 )
                 self.rendered_imgs["as"].append(img)
             # velocity
             if "vs" in data.keys():
                 img = self.render_wdw(
-                    data["xs"][frame], val=data["vs"][frame], val_max=0.5, camera=camera
+                    data["sim_traj"][frame],
+                    val=data["vs"][frame],
+                    val_max=0.5,
+                    camera=camera,
                 )
                 self.rendered_imgs["vs"].append(img)
         self.renderer.delete()

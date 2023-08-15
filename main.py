@@ -61,17 +61,17 @@ def main(_):
             model.save_network(epoch_label=it)
 
             # inference
-            model.reinit_envs(1, wdw_length=model.gt_steps, is_eval=True)
+            model.reinit_envs(1, wdw_length=model.total_frames, is_eval=True)
             model.forward()
             data = model.query()
-            vis.show(it, data, fps=1.0 / model.samp_int)
+            vis.show(it, data, fps=1.0 / model.frame_interval)
 
             # training
             # model.reinit_envs(100, wdw_length=1,is_eval=False)
             # model.reinit_envs(10, wdw_length=8, is_eval=False)
             model.reinit_envs(10, wdw_length=24, is_eval=False)
             ##TODO schedule window length
-            # wdw_length = int(0.5*(model.gt_steps - 1)/["total_iters"]*it + 1)
+            # wdw_length = int(0.5*(model.total_frames - 1)/["total_iters"]*it + 1)
             # num_envs = max(1,int(100 / wdw_length))
             # print('wdw/envs: %d/%d'%(wdw_length, num_envs))
             # model.reinit_envs(num_envs, wdw_length=wdw_length,is_eval=False)

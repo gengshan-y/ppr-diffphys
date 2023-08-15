@@ -213,7 +213,7 @@ class phys_model(nn.Module):
         _, _, queried_q, queried_qd, _, _ = self.get_batch_input(steps_fr)
 
         queried_position, _, _ = ForwardKinematics.apply(
-            queried_q[:, None], queried_qd[:, None], self
+            queried_q[:, None], queried_qd[:, None], self.env
         )  # steps, n_env, x
         foot_height = self.get_foot_height(queried_position)[0, 0]
 
@@ -224,34 +224,34 @@ class phys_model(nn.Module):
         )
 
     def add_nn_modules(self):
-        self.root_pose_mlp = TimeMLPOld(tscale=1.0 / self.gt_steps, out_channels=6)
+        self.root_pose_mlp = TimeMLPOld(tscale=1.0 / self.total_frames, out_channels=6)
         self.joint_angle_mlp = TimeMLPOld(
-            tscale=1.0 / self.gt_steps, out_channels=self.n_dof
+            tscale=1.0 / self.total_frames, out_channels=self.n_dof
         )
         self.vel_mlp = TimeMLPOld(
-            tscale=1.0 / self.gt_steps, out_channels=6 + self.n_dof
+            tscale=1.0 / self.total_frames, out_channels=6 + self.n_dof
         )
         self.torque_mlp = TimeMLPOld(
-            tscale=1.0 / self.gt_steps, out_channels=self.n_dof
+            tscale=1.0 / self.total_frames, out_channels=self.n_dof
         )
         self.residual_f_mlp = TimeMLPOld(
-            tscale=1.0 / self.gt_steps, out_channels=6 * self.n_links
+            tscale=1.0 / self.total_frames, out_channels=6 * self.n_links
         )
 
-        # msm = self.get_mocap_data(np.arange(self.gt_steps))
-        # rtmat = np.eye(4)[None].repeat(self.gt_steps, 0)
+        # msm = self.get_mocap_data(np.arange(self.total_frames))
+        # rtmat = np.eye(4)[None].repeat(self.total_frames, 0)
         # rtmat[:, :3, :3] = R.from_quat(msm["orn"]).as_matrix()  # xyzw
         # rtmat[:, :3, 3] = msm["pos"]
         # rtmat = rtmat.astype(np.float32)
         # self.root_pose_mlp = CameraMLPWrapper(rtmat)
         # self.root_pose_mlp.mlp_init()
 
-        # self.root_pose_mlp = TimeMLPWrapper(self.gt_steps, out_channels=6)
-        # self.joint_angle_mlp = TimeMLPWrapper(self.gt_steps, out_channels=self.n_dof)
-        # self.vel_mlp = TimeMLPWrapper(self.gt_steps, out_channels=6 + self.n_dof)
-        # self.torque_mlp = TimeMLPWrapper(self.gt_steps, out_channels=self.n_dof)
+        # self.root_pose_mlp = TimeMLPWrapper(self.total_frames, out_channels=6)
+        # self.joint_angle_mlp = TimeMLPWrapper(self.total_frames, out_channels=self.n_dof)
+        # self.vel_mlp = TimeMLPWrapper(self.total_frames, out_channels=6 + self.n_dof)
+        # self.torque_mlp = TimeMLPWrapper(self.total_frames, out_channels=self.n_dof)
         # self.residual_f_mlp = TimeMLPWrapper(
-        #     self.gt_steps, out_channels=6 * self.n_links
+        #     self.total_frames, out_channels=6 * self.n_links
         # )
 
     def set_progress(self, num_iters):
@@ -294,15 +294,14 @@ class phys_model(nn.Module):
     def reinit_envs(self, num_envs, wdw_length, is_eval=False, overwrite=False):
         self.num_envs = num_envs
         self.wdw_length = wdw_length  # frames
-        self.local_steps = range(self.skip_factor * self.wdw_length)
-        self.local_steps_fr = (
-            torch.cuda.LongTensor(self.local_steps) / self.skip_factor
+        self.wdw_steps = range(self.steps_per_frame * self.wdw_length)
+        self.wdw_steps_fr = (
+            torch.cuda.LongTensor(self.wdw_steps) / self.steps_per_frame
         )  # frames
-        self.wdw_length_full = len(self.local_steps)
 
         self.frame2step = [0]
-        for i in range(len(self.local_steps) + 1):
-            if (i + 1) % self.skip_factor == 0:
+        for i in range(len(self.wdw_steps) + 1):
+            if (i + 1) % self.steps_per_frame == 0:
                 self.frame2step.append(i)
 
         if is_eval:
@@ -328,7 +327,7 @@ class phys_model(nn.Module):
 
             # modify it to be local
             self.state_steps = []
-            for i in range(len(self.local_steps) + 1):
+            for i in range(len(self.wdw_steps) + 1):
                 state = self.env.state(requires_grad=True)
                 self.state_steps.append(state)
 
@@ -341,17 +340,16 @@ class phys_model(nn.Module):
         if hasattr(dataloader, "amp_info"):
             amp_info = dataloader.amp_info
 
-        self.data_offset = dataloader.data_info["offset"]
-        self.samp_int = dataloader.samp_int
+        self.frame_offset_raw = dataloader.data_info["offset"]
+        self.frame_interval = dataloader.frame_interval
 
-        self.gt_steps = len(amp_info) - 1  # for k frames, need to step k-1 times
-        self.gt_steps_visible = self.gt_steps
-        self.max_steps = int(self.samp_int * self.gt_steps / self.dt)
-        self.skip_factor = self.max_steps // self.gt_steps
+        self.total_frames = len(amp_info) - 1  # for k frames, need to step k-1 times
+        self.total_steps = int(self.frame_interval * self.total_frames / self.dt)
+        self.steps_per_frame = self.total_steps // self.total_frames
 
         # data query
         self.amp_info_func = scipy.interpolate.interp1d(
-            np.asarray(range(self.gt_steps + 1)),
+            np.asarray(range(self.total_frames + 1)),
             amp_info,
             kind="linear",
             fill_value="extrapolate",
@@ -538,7 +536,7 @@ class phys_model(nn.Module):
     def compute_frame_start(self):
         frame_start = torch.Tensor(np.random.rand(self.num_envs)).to(self.device)
         frame_start = (
-            (frame_start * (self.gt_steps_visible - self.wdw_length)).round().long()
+            (frame_start * (self.total_frames - self.wdw_length)).round().long()
         )
         return frame_start
 
@@ -553,7 +551,7 @@ class phys_model(nn.Module):
         target_qd_at_frame = target_qd_at_frame.permute(1, 0, 2).contiguous()
         # get traget body q
         target_body_q, target_body_qd, msm = ForwardKinematics.apply(
-            target_q_at_frame, target_qd_at_frame, self
+            target_q_at_frame, target_qd_at_frame, self.env
         )
         return target_body_q, target_body_qd, msm
 
@@ -627,9 +625,11 @@ class phys_model(nn.Module):
             frame_start = self.compute_frame_start()
         else:
             frame_start = frame_start[: self.num_envs]
-        steps_fr = frame_start[:, None] + self.local_steps_fr[None]  # bs,T
+        steps_fr = frame_start[:, None] + self.wdw_steps_fr[None]  # bs,T
         vidid, _ = fid_reindex(
-            steps_fr[:, self.frame2step], len(self.data_offset) - 1, self.data_offset
+            steps_fr[:, self.frame2step],
+            len(self.frame_offset_raw) - 1,
+            self.frame_offset_raw,
         )
         outseq_idx = (vidid[:, :1] - vidid) != 0
 
@@ -692,9 +692,12 @@ class phys_model(nn.Module):
         )
         # get control ref body q
         queried_position, queried_velocity, self.pid_ref = ForwardKinematics.apply(
-            queried_q, queried_qd, self
+            queried_q, queried_qd, self.env
         )
         foot_height = self.get_foot_height(queried_position)
+        foot_height_target = self.get_foot_height(target_position)
+        print("queried foot height: %.4f" % foot_height.min())
+        print("target foot height: %.4f" % foot_height_target.min())
 
         # compute targets and simulated states
         target_position = target_position.reshape(
@@ -746,7 +749,7 @@ class phys_model(nn.Module):
         if total_loss.isnan():
             pdb.set_trace()
 
-        print("loss: %.4f / fw time: %.2f s" % (total_loss.cpu(), time.time() - beg))
+        # print("loss: %.4f / fw time: %.2f s" % (total_loss.cpu(), time.time() - beg))
         loss_dict["total_loss"] = total_loss
 
         return loss_dict
@@ -757,7 +760,7 @@ class phys_model(nn.Module):
     def query(self, img_size=None):
         x_sims = []
         x_msms = []
-        x_tsts = []  # target
+        x_control_refs = []  # target
         com_k = []
         data = {}
 
@@ -779,7 +782,7 @@ class phys_model(nn.Module):
             x_msm = can2gym2gl(
                 x_rest, target_traj, in_bullet=self.in_bullet, use_urdf=use_urdf
             )
-            x_tst = can2gym2gl(
+            x_control_ref = can2gym2gl(
                 x_rest, pid_ref, in_bullet=self.in_bullet, use_urdf=use_urdf
             )
             x_sim = can2gym2gl(
@@ -793,14 +796,14 @@ class phys_model(nn.Module):
 
             x_sims.append(x_sim)
             x_msms.append(x_msm)
-            x_tsts.append(x_tst)
+            x_control_refs.append(x_control_ref)
         x_sims = np.stack(x_sims, 0)
         x_msms = np.stack(x_msms, 0)
-        x_tsts = np.stack(x_tsts, 0)
+        x_control_refs = np.stack(x_control_refs, 0)
 
-        data["xs"] = x_sims  # simulation
-        data["xgt"] = x_msms  # reference trajectory
-        data["tst"] = x_tsts  # control target
+        data["sim_traj"] = x_sims  # simulation
+        data["target_traj"] = x_msms  # reference trajectory
+        data["control_ref"] = x_control_refs  # control target
         data["com_k"] = com_k
 
         if img_size is not None:
@@ -833,10 +836,11 @@ class phys_model(nn.Module):
 
 class ForwardKinematics(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, rj_q, rj_qd, self):
+    def forward(ctx, rj_q, rj_qd, env):
         """
         rj_q:  T, bs, 7+B
         rj_qd: T, bs, 6+B / none
+        frame2step: T
         """
         if rj_q.is_cuda:
             is_cuda = True
@@ -845,21 +849,21 @@ class ForwardKinematics(torch.autograd.Function):
             rj_q = rj_q.cuda()
             rj_qd = rj_qd.cuda()
 
-        nfr, bs, ndof = rj_q.shape
+        num_frames, bs, ndof = rj_q.shape
         # save variables
-        ctx.self = self
+        ctx.num_frames = num_frames
         ctx.bs = bs
         ctx.ndof = ndof
         ctx.rj_q = []
         ctx.rj_qd = []
         ctx.state_steps = []
-        for i in self.frame2step:
-            state = self.env.state(requires_grad=True)
+        for i in range(num_frames):
+            state = env.state(requires_grad=True)
             ctx.state_steps.append(state)
 
-        rj_q = rj_q.view(nfr, -1)
-        rj_qd = rj_qd.view(nfr, -1)
-        for it, step in enumerate(self.frame2step):
+        rj_q = rj_q.view(num_frames, -1)
+        rj_qd = rj_qd.view(num_frames, -1)
+        for it in range(num_frames):
             # q
             ctx.rj_q.append(wp.from_torch(rj_q[it]))
             # qd
@@ -874,18 +878,15 @@ class ForwardKinematics(torch.autograd.Function):
         with ctx.tape:
             body_q = []
             body_qd = []
-            msm = []
-            for it, step in enumerate(self.frame2step):
-                step = it
-                eval_fk(
-                    self.env, ctx.rj_q[it], ctx.rj_qd[it], None, ctx.state_steps[step]
-                )  #
-                body_q_sub = wp.to_torch(ctx.state_steps[step].body_q)  # bs*-1,7
+            body_q_numpy = []
+            for it in range(num_frames):
+                eval_fk(env, ctx.rj_q[it], ctx.rj_qd[it], None, ctx.state_steps[it])  #
+                body_q_sub = wp.to_torch(ctx.state_steps[it].body_q)  # bs*-1,7
                 body_q_sub = body_q_sub.reshape(bs, -1, 7)
                 body_q.append(body_q_sub)
-                msm.append(body_q_sub.detach().cpu().numpy()[0])
+                body_q_numpy.append(body_q_sub.detach().cpu().numpy()[0])
 
-                body_qd_sub = wp.to_torch(ctx.state_steps[step].body_qd)  # bs*-1,6
+                body_qd_sub = wp.to_torch(ctx.state_steps[it].body_qd)  # bs*-1,6
                 body_qd_sub = body_qd_sub.reshape(bs, -1, 6)
                 body_qd.append(body_qd_sub)
             body_q = torch.stack(body_q, 1)  # bs,T,dofs,7
@@ -895,19 +896,17 @@ class ForwardKinematics(torch.autograd.Function):
             body_q = body_q.cpu()
             body_qd = body_qd.cpu()
 
-        return body_q, body_qd, msm
+        return body_q, body_qd, body_q_numpy
 
     @staticmethod
     def backward(ctx, adj_body_qs, adj_body_qd, _):
-        self = ctx.self
-        for it, step in enumerate(self.frame2step):
-            step = it
+        for it in range(ctx.num_frames):
             grad_body_q = adj_body_qs[:, it].reshape(-1, 7)  # bs, T, -1, 7
-            ctx.state_steps[step].body_q.grad = wp.from_torch(
+            ctx.state_steps[it].body_q.grad = wp.from_torch(
                 grad_body_q, dtype=wp.transform
             )
             grad_body_qd = adj_body_qd[:, it].reshape(-1, 6)  # bs, T, -1, 7
-            ctx.state_steps[step].body_qd.grad = wp.from_torch(
+            ctx.state_steps[it].body_qd.grad = wp.from_torch(
                 grad_body_qd, dtype=wp.spatial_vector
             )
 
@@ -998,7 +997,7 @@ class ForwardWarp(torch.autograd.Function):
             # simulate
             self.grfs = []
             self.jafs = []
-            for step in self.local_steps:
+            for step in self.wdw_steps:
                 self.state_steps[step].clear_forces()
 
                 self.env.joint_target = ctx.refs[step]

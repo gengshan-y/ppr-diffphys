@@ -12,7 +12,7 @@ class DataLoader:
         datadir = "./data/motion_sequences/%s/" % opts["seqname"]
         with open("%s/amp-%s.txt" % (datadir, opts["seqname"]), "r") as f:
             self.amp_info = json.load(f)
-            self.samp_int = self.amp_info["FrameDuration"]
+            self.frame_interval = self.amp_info["FrameDuration"]
             self.amp_info = np.asarray(self.amp_info["Frames"])
 
         self.data_info = {"offset": np.asarray([0, len(self.amp_info)])}

@@ -20,12 +20,11 @@ class phys_interface(phys_model):
         self.object_field = model_dict["object_field"]
         self.intrinsics = model_dict["intrinsics"]
 
-        self.data_offset = self.scene_field.camera_mlp.time_embedding.frame_offset
-        self.samp_int = 1.0 / 30
-        self.gt_steps = self.data_offset[-1] - 1
-        self.gt_steps_visible = self.gt_steps
-        self.max_steps = int(self.samp_int * self.gt_steps / self.dt)
-        self.skip_factor = self.max_steps // self.gt_steps
+        self.frame_offset_raw = self.scene_field.frame_offset_raw
+        self.frame_interval = 1.0 / 30
+        self.total_frames = self.frame_offset_raw[-1] - 1
+        self.total_steps = int(self.frame_interval * self.total_frames / self.dt)
+        self.steps_per_frame = self.total_steps // self.total_frames
 
     def add_nn_modules(self):
         super().add_nn_modules()
@@ -96,8 +95,8 @@ class phys_interface(phys_model):
                 steps_fr, self.object_field.warp.articulation, self.env, self.robot
             )
             # TODO this is problematic due to the discrete root pose
-            # batch['target_qd'] = self.compute_gradient(self.pred_est_q,  steps_fr.clone()) / self.samp_int
-            # batch['target_jad']= self.compute_gradient(self.pred_est_ja, steps_fr.clone()) / self.samp_int
+            # batch['target_qd'] = self.compute_gradient(self.pred_est_q,  steps_fr.clone()) / self.frame_interval
+            # batch['target_jad']= self.compute_gradient(self.pred_est_ja, steps_fr.clone()) / self.frame_interval
             batch["target_qd"] = torch.zeros_like(batch["target_q"])[..., :6]
             batch["target_jad"] = torch.zeros_like(batch["target_ja"])
             batch["ks"] = self.intrinsics.get_vals(steps_fr.reshape(-1).long())
@@ -119,13 +118,13 @@ class phys_interface(phys_model):
             frame_start_sub = (
                 frame_start
                 * (
-                    self.data_offset[vidid + 1]
-                    - self.data_offset[vidid]
+                    self.frame_offset_raw[vidid + 1]
+                    - self.frame_offset_raw[vidid]
                     - self.wdw_length
                 )
             ).round()
             frame_start_sub = torch.clamp(frame_start_sub, 0, np.inf).long()
-            frame_start_sub += self.data_offset[vidid]
+            frame_start_sub += self.frame_offset_raw[vidid]
             frame_start_all.append(frame_start_sub)
         frame_start = torch.cat(frame_start_all, 0)
         rand_list = np.asarray(range(frame_start.shape[0]))
@@ -135,22 +134,16 @@ class phys_interface(phys_model):
 
     def get_batch_input(self, steps_fr):
         batch = self.query_kinematics_groundtruth(steps_fr)
-        target_q, target_ja, target_qd, target_jad = (
-            batch["target_q"],
-            batch["target_ja"],
-            batch["target_qd"],
-            batch["target_jad"],
+        target_position, target_velocity, self.target_trajs = self.fk_pos_vel(
+            batch["target_q"][:, self.frame2step],
+            batch["target_ja"][:, self.frame2step],
+            batch["target_qd"][:, self.frame2step],
+            batch["target_jad"][:, self.frame2step],
         )
-        self.target_q_vis = target_q[:, self.frame2step].clone()
+
+        self.target_q_vis = batch["target_q"][:, self.frame2step].clone()
         self.obj2view_vis = batch["obj2view"][:, self.frame2step].clone()
         self.ks_vis = batch["ks"][:, self.frame2step].clone()
-
-        target_position, target_velocity, self.target_trajs = self.fk_pos_vel(
-            target_q[:, self.frame2step],
-            target_ja[:, self.frame2step],
-            target_qd[:, self.frame2step],
-            target_jad[:, self.frame2step],
-        )
 
         (
             torques,
@@ -175,6 +168,27 @@ class phys_interface(phys_model):
         kp_idxs = [self.dict_unique_body_inv[it] for it in kp_idxs]
         foot_height = state_body_q[:, :, kp_idxs, 1]
         return foot_height
+
+    def correct_foot_position(self, increment=0.01):
+        # make sure foot is above the ground by changing object scale
+        self.reinit_envs(1, wdw_length=self.frame_offset_raw[-1], is_eval=True)
+        while True:
+            self.object_field.logscale.data += increment
+            self.kinemtics_proxy.object_field.logscale.data += increment
+            # observable_steps = self.wdw_steps[self.frame2step]
+            frame_ids = torch.arange(self.total_frames, device=self.device)
+            batch = self.query_kinematics_groundtruth(frame_ids[None])
+            _, _, target_trajs = self.fk_pos_vel(
+                batch["target_q"],
+                batch["target_ja"],
+                batch["target_qd"],
+                batch["target_jad"],
+            )
+            target_trajs = np.stack(target_trajs, 0)
+            foot_height = self.get_foot_height(target_trajs[None])[0]  # N,4
+            print("foot height:", foot_height.min())
+            if foot_height.min() > 0.0:
+                break
 
 
 class KinemticsProxy(nn.Module):
@@ -218,26 +232,33 @@ class KinemticsProxy(nn.Module):
 def query_q(steps_fr, object_field, scene_field):
     """
     bs,T
-    robot2world = scale(bg2world @ bg2view^-1 @ root2view @ se3)
+    urdf_to_world = (scene_to_world @ scene_to_view^-1) @ (object_to_view @ urdf_to_object)
+    urdf_to_world = (urdf_to_world_R | urdf_to_world_t * view_to_object_scale / urdf_to_object_scale)
+    fixed: urdf_to_object scale
+    optimized: view_to_object scale, view_to_scene scale
     """
     bs = steps_fr.shape[0]
-    data_offset = scene_field.camera_mlp.time_embedding.frame_offset
-    vidid, _ = fid_reindex(steps_fr, len(data_offset) - 1, data_offset)
+    frame_offset_raw = scene_field.frame_offset_raw
+    vidid, _ = fid_reindex(steps_fr, len(frame_offset_raw) - 1, frame_offset_raw)
     vidid = vidid.long()
 
-    # query obj/scene to view
+    # query scales
+    view_to_obj_scale = object_field.logscale.exp()
+    urdf_to_obj_scale = object_field.warp.articulation.logscale.exp()
+
+    # query obj/scene to view (object view scale, scene view scale)
     obj_to_view = object_field.get_camera(frame_id=steps_fr.reshape(-1).long())
     scene_to_view = scene_field.get_camera(frame_id=steps_fr.reshape(-1).long())
 
-    # urdf to object
+    # urdf to object (object view scale)
     orient = object_field.warp.articulation.orient
     orient = dqtorch.quaternion_to_matrix(orient)
-    shift = object_field.warp.articulation.shift
+    shift = object_field.warp.articulation.shift / view_to_obj_scale
     urdf_to_object = torch.cat([orient, shift[..., None]], -1)
     urdf_to_object = urdf_to_object.view(1, 3, 4)
     urdf_to_object = torch.cat([urdf_to_object, obj_to_view[:1, -1:]], -2)
 
-    # urdf to view/scene
+    # urdf to view/scene (object/scene view scale)
     urdf_to_view = obj_to_view @ urdf_to_object
     urdf_to_scene = scene_to_view.inverse() @ urdf_to_view
 
@@ -252,14 +273,12 @@ def query_q(steps_fr, object_field, scene_field):
     urdf_to_world = cv2gl[None] @ urdf_to_world
 
     # scale: from object to urdf
-    urdf_scale = (
-        object_field.logscale.exp() / object_field.warp.articulation.logscale.exp()
-    )
+    view_to_urdf_scale = view_to_obj_scale / urdf_to_obj_scale
     urdf_to_world = urdf_to_world.clone()
-    urdf_to_world[..., :3, 3] *= urdf_scale
+    urdf_to_world[..., :3, 3] *= view_to_urdf_scale
 
     urdf_to_view = urdf_to_view.clone()
-    urdf_to_view[..., :3, 3] *= urdf_scale
+    urdf_to_view[..., :3, 3] *= view_to_urdf_scale
 
     # rearrange
     urdf_to_world_vec = se3_mat2vec(urdf_to_world)  # xyzw
@@ -273,8 +292,8 @@ def query_ja(steps_fr, nerf_body_rts, env, robot):
     bs,T
     """
     bs = steps_fr.shape[0]
-    data_offset = nerf_body_rts.time_embedding.frame_offset
-    inst_id, _ = fid_reindex(steps_fr, len(data_offset) - 1, data_offset)
+    frame_offset_raw = nerf_body_rts.time_embedding.frame_offset_raw
+    inst_id, _ = fid_reindex(steps_fr, len(frame_offset_raw) - 1, frame_offset_raw)
     inst_id = inst_id.long()
 
     # pred joint angles
