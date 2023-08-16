@@ -291,17 +291,19 @@ class phys_model(nn.Module):
                 new_dict[i] = v
         return new_dict
 
-    def reinit_envs(self, num_envs, wdw_length, is_eval=False, overwrite=False):
+    def reinit_envs(self, num_envs, frames_per_wdw, is_eval=False, overwrite=False):
         self.num_envs = num_envs
-        self.wdw_length = wdw_length  # frames
-        self.wdw_steps = range(self.steps_per_frame * self.wdw_length)
-        self.wdw_steps_fr = (
-            torch.cuda.LongTensor(self.wdw_steps) / self.steps_per_frame
+        self.frames_per_wdw = frames_per_wdw
+        self.steps_idx = range(
+            self.steps_per_fr_interval * (self.frames_per_wdw - 1) + 1
+        )
+        self.steps_idx_fr = (
+            torch.cuda.LongTensor(self.steps_idx) / self.steps_per_fr_interval
         )  # frames
 
-        self.frame2step = [0]
-        for i in range(len(self.wdw_steps) + 1):
-            if (i + 1) % self.steps_per_frame == 0:
+        self.frame2step = []
+        for i in range(len(self.steps_idx)):
+            if i % self.steps_per_fr_interval == 0:
                 self.frame2step.append(i)
 
         if is_eval:
@@ -327,7 +329,7 @@ class phys_model(nn.Module):
 
             # modify it to be local
             self.state_steps = []
-            for i in range(len(self.wdw_steps) + 1):
+            for i in range(len(self.steps_idx) + 1):  # to include the last step
                 state = self.env.state(requires_grad=True)
                 self.state_steps.append(state)
 
@@ -343,13 +345,14 @@ class phys_model(nn.Module):
         self.frame_offset_raw = dataloader.data_info["offset"]
         self.frame_interval = dataloader.frame_interval
 
-        self.total_frames = len(amp_info) - 1  # for k frames, need to step k-1 times
-        self.total_steps = int(self.frame_interval * self.total_frames / self.dt)
-        self.steps_per_frame = self.total_steps // self.total_frames
+        self.total_frames = len(amp_info)
+        self.steps_per_fr_interval = int(self.frame_interval / self.dt)
+        print("total_frames:", self.total_frames)
+        print("steps_per_fr_interval:", self.steps_per_fr_interval)
 
         # data query
         self.amp_info_func = scipy.interpolate.interp1d(
-            np.asarray(range(self.total_frames + 1)),
+            np.asarray(range(self.total_frames)),
             amp_info,
             kind="linear",
             fill_value="extrapolate",
@@ -536,7 +539,7 @@ class phys_model(nn.Module):
     def compute_frame_start(self):
         frame_start = torch.Tensor(np.random.rand(self.num_envs)).to(self.device)
         frame_start = (
-            (frame_start * (self.total_frames - self.wdw_length)).round().long()
+            (frame_start * (self.total_frames - self.frames_per_wdw)).round().long()
         )
         return frame_start
 
@@ -625,7 +628,7 @@ class phys_model(nn.Module):
             frame_start = self.compute_frame_start()
         else:
             frame_start = frame_start[: self.num_envs]
-        steps_fr = frame_start[:, None] + self.wdw_steps_fr[None]  # bs,T
+        steps_fr = frame_start[:, None] + self.steps_idx_fr[None]  # bs,T
         vidid, _ = fid_reindex(
             steps_fr[:, self.frame2step],
             len(self.frame_offset_raw) - 1,
@@ -685,29 +688,26 @@ class phys_model(nn.Module):
 
         # compute queried states
         queried_q = queried_q[self.frame2step].reshape(
-            self.wdw_length + 1, self.num_envs, -1
+            self.frames_per_wdw, self.num_envs, -1
         )
         queried_qd = queried_qd[self.frame2step].reshape(
-            self.wdw_length + 1, self.num_envs, -1
+            self.frames_per_wdw, self.num_envs, -1
         )
         # get control ref body q
         queried_position, queried_velocity, self.pid_ref = ForwardKinematics.apply(
             queried_q, queried_qd, self.env
         )
         foot_height = self.get_foot_height(queried_position)
-        foot_height_target = self.get_foot_height(target_position)
-        print("queried foot height: %.4f" % foot_height.min())
-        print("target foot height: %.4f" % foot_height_target.min())
 
         # compute targets and simulated states
         target_position = target_position.reshape(
-            self.num_envs, self.wdw_length + 1, -1, 7
+            self.num_envs, self.frames_per_wdw, -1, 7
         )
         sim_position = sim_position.reshape(
-            self.wdw_length + 1, self.num_envs, -1, 7
+            self.frames_per_wdw, self.num_envs, -1, 7
         ).permute(1, 0, 2, 3)
         sim_velocity = sim_velocity.reshape(
-            self.wdw_length + 1, self.num_envs, -1, 6
+            self.frames_per_wdw, self.num_envs, -1, 6
         ).permute(1, 0, 2, 3)
 
         loss_dict = {}
@@ -997,7 +997,7 @@ class ForwardWarp(torch.autograd.Function):
             # simulate
             self.grfs = []
             self.jafs = []
-            for step in self.wdw_steps:
+            for step in self.steps_idx:
                 self.state_steps[step].clear_forces()
 
                 self.env.joint_target = ctx.refs[step]

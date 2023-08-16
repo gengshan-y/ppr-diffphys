@@ -2,6 +2,7 @@ import pdb
 import time
 from absl import app
 from absl import flags
+import tqdm
 
 from diffphys.dp_model import phys_model
 from diffphys.vis import Logger
@@ -52,7 +53,7 @@ def main(_):
     model.cuda()
 
     # opt
-    for it in range(model.total_iters):
+    for it in tqdm.tqdm(range(model.total_iters)):
         model.progress = it / (opts["num_rounds"] * opts["iters_per_round"])
 
         # eval
@@ -61,20 +62,20 @@ def main(_):
             model.save_network(epoch_label=it)
 
             # inference
-            model.reinit_envs(1, wdw_length=model.total_frames, is_eval=True)
+            model.reinit_envs(1, frames_per_wdw=model.total_frames, is_eval=True)
             model.forward()
             data = model.query()
             vis.show(it, data, fps=1.0 / model.frame_interval)
 
             # training
-            # model.reinit_envs(100, wdw_length=1,is_eval=False)
-            # model.reinit_envs(10, wdw_length=8, is_eval=False)
-            model.reinit_envs(10, wdw_length=24, is_eval=False)
+            # model.reinit_envs(100, frames_per_wdw=1,is_eval=False)
+            # model.reinit_envs(10, frames_per_wdw=8, is_eval=False)
+            model.reinit_envs(10, frames_per_wdw=24, is_eval=False)
             ##TODO schedule window length
-            # wdw_length = int(0.5*(model.total_frames - 1)/["total_iters"]*it + 1)
-            # num_envs = max(1,int(100 / wdw_length))
-            # print('wdw/envs: %d/%d'%(wdw_length, num_envs))
-            # model.reinit_envs(num_envs, wdw_length=wdw_length,is_eval=False)
+            # frames_per_wdw = int(0.5*(model.total_frames - 1)/["total_iters"]*it + 1)
+            # num_envs = max(1,int(100 / frames_per_wdw))
+            # print('wdw/envs: %d/%d'%(frames_per_wdw, num_envs))
+            # model.reinit_envs(num_envs, frames_per_wdw=frames_per_wdw,is_eval=False)
 
         # train
         t = time.time()
@@ -85,7 +86,6 @@ def main(_):
         loss = loss / float(opts["accu_steps"])
         model.backward(loss)
         model.update()
-        print(it)
         log_data = loss_dict
         log_data["iter_time"] = time.time() - t
         log_data["loss"] = loss

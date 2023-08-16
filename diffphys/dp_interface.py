@@ -21,10 +21,13 @@ class phys_interface(phys_model):
         self.intrinsics = model_dict["intrinsics"]
 
         self.frame_offset_raw = self.scene_field.frame_offset_raw
-        self.frame_interval = 1.0 / 30
-        self.total_frames = self.frame_offset_raw[-1] - 1
-        self.total_steps = int(self.frame_interval * self.total_frames / self.dt)
-        self.steps_per_frame = self.total_steps // self.total_frames
+        self.frame_interval = 0.1
+
+        # number of observations at end points and steps in each interval
+        self.total_frames = self.frame_offset_raw[-1]
+        self.steps_per_fr_interval = int(self.frame_interval / self.dt)
+        print("total_frames:", self.total_frames)
+        print("steps_per_fr_interval:", self.steps_per_fr_interval)
 
     def add_nn_modules(self):
         super().add_nn_modules()
@@ -79,8 +82,8 @@ class phys_interface(phys_model):
         )
         return param_lr_startwith, param_lr_with
 
-    def reinit_envs(self, num_envs, wdw_length, is_eval=False, overwrite=False):
-        super().reinit_envs(num_envs, wdw_length, is_eval, overwrite)
+    def reinit_envs(self, num_envs, frames_per_wdw, is_eval=False, overwrite=False):
+        super().reinit_envs(num_envs, frames_per_wdw, is_eval, overwrite)
         self.env.gravity[1] = -5.0
 
     def query_kinematics_groundtruth(self, steps_fr):
@@ -120,7 +123,7 @@ class phys_interface(phys_model):
                 * (
                     self.frame_offset_raw[vidid + 1]
                     - self.frame_offset_raw[vidid]
-                    - self.wdw_length
+                    - self.frames_per_wdw
                 )
             ).round()
             frame_start_sub = torch.clamp(frame_start_sub, 0, np.inf).long()
@@ -171,11 +174,10 @@ class phys_interface(phys_model):
 
     def correct_foot_position(self, increment=0.01):
         # make sure foot is above the ground by changing object scale
-        self.reinit_envs(1, wdw_length=self.frame_offset_raw[-1], is_eval=True)
+        self.reinit_envs(1, frames_per_wdw=self.frame_offset_raw[-1], is_eval=True)
         while True:
             self.object_field.logscale.data += increment
             self.kinemtics_proxy.object_field.logscale.data += increment
-            # observable_steps = self.wdw_steps[self.frame2step]
             frame_ids = torch.arange(self.total_frames, device=self.device)
             batch = self.query_kinematics_groundtruth(frame_ids[None])
             _, _, target_trajs = self.fk_pos_vel(
