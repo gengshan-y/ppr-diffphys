@@ -35,7 +35,7 @@ class Logger:
             tag = "%05d" % tag
 
         # create window
-        self.rendered_imgs = {"target": [], "control_ref": [], "sim": []}
+        self.rendered_imgs = {"target": [], "sim": [], "control_ref": []}
         if "vs" in data.keys():
             self.rendered_imgs["vs"] = []
         if "as" in data.keys():
@@ -77,15 +77,22 @@ class Logger:
             camera = {"rtk": rtk}
 
             # gt mesh
-            img = self.render_wdw(data["target_traj"][frame], camera=camera)
+            target = data["target_traj"][frame]
+            img = self.render_wdw(target, camera=camera)
             self.rendered_imgs["target"].append(img)
 
             # control reference
-            img = self.render_wdw(data["control_ref"][frame], camera=camera)
+            control_ref = data["control_ref"][frame]
+            img = self.render_wdw(control_ref, camera=camera)
             self.rendered_imgs["control_ref"].append(img)
 
             # simulated
-            img = self.render_wdw(data["sim_traj"][frame], camera=camera)
+            sim_traj = data["sim_traj"][frame]
+            transparent_colors = target.visual.vertex_colors.copy()
+            transparent_colors[:, 3] = 64
+            target.visual.vertex_colors = transparent_colors
+            merged_mesh = trimesh.util.concatenate([sim_traj, target])
+            img = self.render_wdw(merged_mesh, camera=camera)
             self.rendered_imgs["sim"].append(img)
 
             # error

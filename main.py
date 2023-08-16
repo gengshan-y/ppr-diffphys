@@ -30,7 +30,7 @@ flags.DEFINE_float("vel_state_wt", 0.0, "weight for velocity matching reg")
 
 # regs
 flags.DEFINE_float("reg_torque_wt", 0.0, "weight for torque regularization")
-flags.DEFINE_float("reg_res_f_wt", 0.0, "weight for residual force regularization")
+flags.DEFINE_float("reg_res_f_wt", 2e-5, "weight for residual force regularization")
 flags.DEFINE_float("reg_foot_wt", 0.0, "weight for foot contact regularization")
 flags.DEFINE_float("reg_root_wt", 0.0, "weight for root pose regularization")
 

@@ -210,7 +210,7 @@ class phys_model(nn.Module):
         self.global_q = torch.tensor([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0])
         steps_fr = torch.tensor([[0]])
 
-        _, _, queried_q, queried_qd, _, _ = self.get_batch_input(steps_fr)
+        _, _, queried_q, queried_qd, _, _, _ = self.get_batch_input(steps_fr)
 
         queried_position, _, _ = ForwardKinematics.apply(
             queried_q[:, None], queried_qd[:, None], self.env
@@ -424,7 +424,7 @@ class phys_model(nn.Module):
             self.optimizer,
             lr_list,
             self.total_iters,
-            pct_start=0.2,  # use 20% iters
+            pct_start=2.0 / self.total_iters,  # use 1 iter
             cycle_momentum=False,
             anneal_strategy="linear",
             final_div_factor=1.0,
@@ -488,10 +488,10 @@ class phys_model(nn.Module):
 
         # residual force
         res_f = self.residual_f_mlp(steps_fr.reshape(-1))
-        # res_f = res_f.view(bs, nstep, -1, 6)
-        # res_f[..., 3:6] *= 10
+        res_f = res_f.view(bs, nstep, -1, 6)
+        res_f[..., 3:6] *= 10  # rotational
         res_f = res_f.view(bs, nstep, -1)
-        res_f *= 0
+        # res_f *= 0
 
         # root pose
         # quat, trans = self.root_pose_mlp.get_vals(steps_fr.reshape(-1))
@@ -614,7 +614,15 @@ class phys_model(nn.Module):
             queried_q, queried_ja, queried_qd, torques, res_f
         )
 
-        return target_position, ref_ja, queried_q, queried_qd, torques, res_f
+        return (
+            target_position,
+            ref_ja,
+            queried_q,
+            queried_qd,
+            torques,
+            res_f,
+            target_q[:, 0],
+        )
 
     def forward(self, frame_start=None):
         # capture requires cuda memory to be pre-allocated
@@ -640,35 +648,39 @@ class phys_model(nn.Module):
         beg = time.time()
         (
             target_position,
-            ref_q,
+            ref_ja,
             queried_q,
             queried_qd,
             torques,
             res_f,
+            target_q_init,
         ) = self.get_batch_input(steps_fr)
 
         # forward simulation
         res_fin = res_f.clone()
-        q_init = queried_q[0]
+        q_init = queried_q[0]  # bs*7+dof
+        q_init = q_init.view(self.num_envs, -1)
+        q_init[:, :7] = target_q_init
+        q_init = q_init.reshape(-1)
         qd_init = queried_qd[0]
         if self.training:
-            # TODO add some noise
+            # decrease to zero when progress = 2/3
             noise_ratio = np.clip(1 - 1.5 * self.progress, 0, 1)
-            q_init_noise = np.random.normal(size=q_init.shape, scale=0.0 * noise_ratio)
-            # q_init_noise = np.random.normal(size=q_init.shape,scale=0.05*noise_ratio)
-            # q_init_noise = np.random.normal(size=q_init.shape,scale=0.1*noise_ratio)
-            qd_init_noise = np.random.normal(
-                size=qd_init.shape, scale=0.01 * noise_ratio
-            )
-            q_init_noise = torch.Tensor(q_init_noise).to(self.device)
-            qd_init_noise = torch.Tensor(qd_init_noise).to(self.device)
-            # only keep the noise on root pose
+            q_init_noise = np.random.normal(size=q_init.shape, scale=0.01 * noise_ratio)
+            q_init_noise = torch.tensor(q_init_noise, device=self.device)
+            # only remove the noise on root translation
             q_init_noise = q_init_noise.view(self.num_envs, -1)
             q_init_noise[:, :3] = 0
-            q_init_noise[:, 7:] = 0
             q_init_noise = q_init_noise.reshape(-1)
-
             q_init += q_init_noise
+
+            # qd_init_noise = np.random.normal(
+            #     size=qd_init.shape, scale=0.002 * noise_ratio
+            # )
+            # qd_init_noise = torch.tensor(qd_init_noise, device=self.device)
+            # qd_init_noise = qd_init_noise.view(self.num_envs, -1)
+            # qd_init_noise[:, :3] = 0
+            # qd_init_noise = qd_init_noise.reshape(-1)
             # qd_init += qd_init_noise
 
         target_ke = self.target_ke[None].repeat(self.num_envs, 1).view(-1)
@@ -679,7 +691,7 @@ class phys_model(nn.Module):
             qd_init,
             torques,
             res_fin,
-            ref_q,
+            ref_ja,
             target_ke,
             target_kd,
             body_mass,
@@ -737,8 +749,8 @@ class phys_model(nn.Module):
         # weight loss
         total_loss = 0
         for k, v in loss_dict.items():
-            loss_dict[k] = v * self.opts[k + "_wt"]
-            total_loss += loss_dict[k]
+            loss_dict[k] = v
+            total_loss += loss_dict[k] * self.opts[k + "_wt"]
 
         # rename keys
         new_loss_dict = {}
@@ -749,7 +761,7 @@ class phys_model(nn.Module):
         if total_loss.isnan():
             pdb.set_trace()
 
-        # print("loss: %.4f / fw time: %.2f s" % (total_loss.cpu(), time.time() - beg))
+        print("loss: %.6f / fw time: %.2f s" % (total_loss.cpu(), time.time() - beg))
         loss_dict["total_loss"] = total_loss
 
         return loss_dict

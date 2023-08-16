@@ -89,6 +89,7 @@ def clip_loss(loss_seq, th=0):
         clip_val, clip_idx = torch.max(loss_seq[i] > th, 0)
         if clip_val == 1:
             loss_seq[i, clip_idx:] = 0
+            print("clipped env %d at %d" % (i, clip_idx))
     if loss_seq.sum() > 0:
         loss_seq = loss_seq[loss_seq > 0].mean()
     else:
