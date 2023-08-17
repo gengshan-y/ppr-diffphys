@@ -7,7 +7,8 @@ import torch.nn as nn
 import dqtorch
 
 from diffphys.dp_model import phys_model
-from diffphys.geom_utils import fid_reindex, se3_mat2vec
+from diffphys.geom_utils import fid_reindex, se3_mat2vec, quaternion_to_axis_angle
+from diffphys.torch_utils import compute_gradient
 
 
 class phys_interface(phys_model):
@@ -41,6 +42,28 @@ class phys_interface(phys_model):
                 x, return_so3=True
             )
         )
+
+        # def vel_mlp(steps_fr):
+        #     def get_xyz_so3(steps_fr):
+        #         xyz_quat = self.root_pose_mlp(steps_fr)
+        #         xyz = xyz_quat[..., :3]
+        #         quat = xyz_quat[..., 3:]
+        #         so3 = quaternion_to_axis_angle(quat)
+        #         return torch.cat([xyz, so3], -1)
+
+        #     def get_joint_angles(steps_fr):
+        #         joint_angles = self.joint_angle_mlp(steps_fr)
+        #         joint_angles = joint_angles.view(joint_angles.shape[:-2] + (-1,))
+        #         return joint_angles
+
+        #     # OOM due to 75d output
+        #     state_qd = compute_gradient(get_xyz_so3, steps_fr)
+        #     state_jad = compute_gradient(get_joint_angles, steps_fr)
+        #     state_qd = torch.cat([state_qd, state_jad], -1) / self.frame_interval
+        #     return state_qd
+
+        # del self.vel_mlp
+        # self.vel_mlp = vel_mlp
 
     def init_global_q(self):
         pass
@@ -110,6 +133,10 @@ class phys_interface(phys_model):
 
     def override_states(self):
         self.kinemtics_proxy.override_states(self.object_field, self.scene_field)
+        # # reset the estimations of velocity, additional torques, residual forces
+        # # as the control reference has changed
+        # self.torque_mlp.reinit()
+        # self.residual_f_mlp.reinit()
 
     def override_states_inv(self):
         self.kinemtics_proxy.override_states_inv(self.object_field, self.scene_field)
@@ -249,8 +276,8 @@ def query_q(steps_fr, object_field, scene_field):
     urdf_to_obj_scale = object_field.warp.articulation.logscale.exp()
 
     # query obj/scene to view (object view scale, scene view scale)
-    obj_to_view = object_field.get_camera(frame_id=steps_fr.reshape(-1).long())
-    scene_to_view = scene_field.get_camera(frame_id=steps_fr.reshape(-1).long())
+    obj_to_view = object_field.get_camera(frame_id=steps_fr.reshape(-1))
+    scene_to_view = scene_field.get_camera(frame_id=steps_fr.reshape(-1))
 
     # urdf to object (object view scale)
     orient = object_field.warp.articulation.orient

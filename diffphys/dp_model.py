@@ -455,31 +455,6 @@ class phys_model(nn.Module):
         target_q = se3_mat2vec(target_qmat)
         return target_q
 
-    @staticmethod
-    def compute_gradient(fn, x):
-        """
-        gradient of mlp params wrt pts
-        """
-        x.requires_grad_(True)
-        y = fn(x)
-
-        # get gradient for each size-1 output
-        gradients = []
-        for i in range(y.shape[-1]):
-            y_sub = y[..., i : i + 1]
-            d_output = torch.ones_like(y_sub, requires_grad=False, device=y.device)
-            gradient = torch.autograd.grad(
-                outputs=y_sub,
-                inputs=x,
-                grad_outputs=d_output,
-                create_graph=True,
-                retain_graph=True,
-                only_inputs=True,
-            )[0]
-            gradients.append(gradient[..., None])
-        gradients = torch.cat(gradients, -1)  # ...,input-dim, output-dim
-        return gradients
-
     def get_net_pred(self, steps_fr):
         """
         steps_fr: bs,T

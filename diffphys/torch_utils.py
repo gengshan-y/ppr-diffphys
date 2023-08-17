@@ -3,6 +3,7 @@ import pdb
 import torch
 from torch import nn
 import torch.nn.functional as F
+import math
 
 import sys, os
 
@@ -15,6 +16,31 @@ from lab4d.utils.quat_transform import (
     quaternion_mul,
     quaternion_translation_to_se3,
 )
+
+
+def compute_gradient(fn, x):
+    """
+    gradient of mlp params wrt pts
+    """
+    x.requires_grad_(True)
+    y = fn(x)
+
+    # get gradient for each size-1 output
+    gradients = []
+    for i in range(y.shape[-1]):
+        y_sub = y[..., i : i + 1]
+        d_output = torch.ones_like(y_sub, requires_grad=False, device=y.device)
+        gradient = torch.autograd.grad(
+            outputs=y_sub,
+            inputs=x,
+            grad_outputs=d_output,
+            create_graph=True,
+            retain_graph=True,
+            only_inputs=True,
+        )[0]
+        gradients.append(gradient[..., None])
+    gradients = torch.cat(gradients, -1)  # ...,input-dim, output-dim
+    return gradients
 
 
 class TimeMLPOld(nn.Module):
@@ -73,6 +99,14 @@ class TimeMLPOld(nn.Module):
 
         out = self.pred(inx_)
         return out
+
+    def reinit(self, gain=1):
+        for m in self.modules():
+            if isinstance(m, nn.Linear):
+                if hasattr(m.weight, "data"):
+                    nn.init.kaiming_uniform_(m.weight, a=math.sqrt(5 * gain))
+                if hasattr(m.bias, "data"):
+                    m.bias.data.zero_()
 
 
 class TimeMLPWrapper(TimeMLP):
