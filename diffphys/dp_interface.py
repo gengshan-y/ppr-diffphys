@@ -33,12 +33,12 @@ class phys_interface(phys_model):
     def add_nn_modules(self):
         super().add_nn_modules()
         # optimized
-        self.kinemtics_proxy = KinemticsProxy(self.object_field, self.scene_field)
+        self.kinematics_proxy = KinematicsProxy(self.object_field, self.scene_field)
         del self.root_pose_mlp
         del self.joint_angle_mlp
-        self.root_pose_mlp = lambda x: self.kinemtics_proxy(x)
+        self.root_pose_mlp = lambda x: self.kinematics_proxy(x)
         self.joint_angle_mlp = (
-            lambda x: self.kinemtics_proxy.object_field.warp.articulation.get_vals(
+            lambda x: self.kinematics_proxy.object_field.warp.articulation.get_vals(
                 x, return_so3=True
             )
         )
@@ -87,18 +87,18 @@ class phys_interface(phys_model):
                 "object_field": lr_zero,
                 "scene_field": lr_zero,
                 "intrinsics": lr_zero,
-                "kinemtics_proxy": lr_base,
+                "kinematics_proxy": lr_base,
             }
         )
         param_lr_with.update(
             {
-                # "kinemtics_proxy.object_field.logscale": lr_explicit,
-                "kinemtics_proxy.object_field.camera_mlp.base_quat": lr_explicit,
-                "kinemtics_proxy.object_field.warp.articulation.logscale": lr_explicit,
-                "kinemtics_proxy.object_field.warp.articulation.shift": lr_explicit,
-                "kinemtics_proxy.object_field.warp.articulation.orient": lr_explicit,
-                # "kinemtics_proxy.scene_field.logscale": lr_explicit,
-                "kinemtics_proxy.scene_field.camera_mlp.base_quat": lr_explicit,
+                # "kinematics_proxy.object_field.logscale": lr_explicit,
+                "kinematics_proxy.object_field.camera_mlp.base_quat": lr_explicit,
+                "kinematics_proxy.object_field.warp.articulation.logscale": lr_explicit,
+                "kinematics_proxy.object_field.warp.articulation.shift": lr_explicit,
+                "kinematics_proxy.object_field.warp.articulation.orient": lr_explicit,
+                # "kinematics_proxy.scene_field.logscale": lr_explicit,
+                "kinematics_proxy.scene_field.camera_mlp.base_quat": lr_explicit,
                 "object_field.logscale": lr_explicit,
                 "scene_field.logscale": lr_explicit,
             }
@@ -120,9 +120,6 @@ class phys_interface(phys_model):
             batch["target_ja"] = query_ja(
                 steps_fr, self.object_field.warp.articulation, self.env, self.robot
             )
-            # TODO this is problematic due to the discrete root pose
-            # batch['target_qd'] = self.compute_gradient(self.pred_est_q,  steps_fr.clone()) / self.frame_interval
-            # batch['target_jad']= self.compute_gradient(self.pred_est_ja, steps_fr.clone()) / self.frame_interval
             batch["target_qd"] = torch.zeros_like(batch["target_q"])[..., :6]
             batch["target_jad"] = torch.zeros_like(batch["target_ja"])
             batch["ks"] = self.intrinsics.get_vals(steps_fr.reshape(-1).long())
@@ -132,14 +129,14 @@ class phys_interface(phys_model):
         return batch
 
     def override_states(self):
-        self.kinemtics_proxy.override_states(self.object_field, self.scene_field)
-        # # reset the estimations of velocity, additional torques, residual forces
-        # # as the control reference has changed
-        # self.torque_mlp.reinit()
-        # self.residual_f_mlp.reinit()
+        self.kinematics_proxy.override_states(self.object_field, self.scene_field)
+        # reset the estimations of velocity, additional torques, residual forces
+        # as the control reference has changed
+        self.torque_mlp.reinit()
+        self.residual_f_mlp.reinit()
 
     def override_states_inv(self):
-        self.kinemtics_proxy.override_states_inv(self.object_field, self.scene_field)
+        self.kinematics_proxy.override_states_inv(self.object_field, self.scene_field)
 
     def compute_frame_start(self):
         frame_start = torch.Tensor(np.random.rand(self.num_envs)).to(self.device)
@@ -204,7 +201,7 @@ class phys_interface(phys_model):
         self.reinit_envs(1, frames_per_wdw=self.frame_offset_raw[-1], is_eval=True)
         while True:
             self.object_field.logscale.data += increment
-            self.kinemtics_proxy.object_field.logscale.data += increment
+            self.kinematics_proxy.object_field.logscale.data += increment
             frame_ids = torch.arange(self.total_frames, device=self.device)
             batch = self.query_kinematics_groundtruth(frame_ids[None])
             _, _, target_trajs = self.fk_pos_vel(
@@ -220,9 +217,9 @@ class phys_interface(phys_model):
                 break
 
 
-class KinemticsProxy(nn.Module):
+class KinematicsProxy(nn.Module):
     def __init__(self, object_field, scene_field):
-        super(KinemticsProxy, self).__init__()
+        super(KinematicsProxy, self).__init__()
         self.object_field = copy.deepcopy(object_field)
         self.scene_field = copy.deepcopy(scene_field)
 
