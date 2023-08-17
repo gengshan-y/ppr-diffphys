@@ -839,7 +839,7 @@ class phys_model(nn.Module):
         self.optimizer_cache[1] = deepcopy(self.optimizer.state_dict())
         self.scheduler_cache[1] = deepcopy(self.scheduler.state_dict())
 
-        if self.opts["local_rank"] == 0:
+        if get_local_rank() == 0:
             save_dict = self.model_cache[1]
             param_path = "%s/ckpt_phys_%04d.pth" % (self.save_dir, round_count)
             torch.save(save_dict, param_path)
@@ -850,7 +850,7 @@ class phys_model(nn.Module):
         states = torch.load(model_path, map_location="cpu")
         self.load_state_dict(states, strict=False)
 
-    def check_grad(self, thresh=1.0):
+    def check_grad(self, thresh=5.0):
         """Check if gradients are above a threshold
 
         Args:
