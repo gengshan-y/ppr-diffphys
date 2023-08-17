@@ -15,6 +15,19 @@ sys.path.insert(0, "%s/../../" % os.path.join(os.path.dirname(__file__)))
 from diffphys.io import save_vid
 
 
+def merge_mesh(mesh_solid, mesh_transparent):
+    """
+    Merge two meshes and set the second mesh to be transparent
+    mesh_solid: trimesh
+    mesh_transparent: trimesh
+    """
+    transparent_colors = mesh_transparent.visual.vertex_colors.copy()
+    transparent_colors[:] = 64
+    mesh_transparent.visual.vertex_colors = transparent_colors
+    merged_mesh = trimesh.util.concatenate([mesh_solid, mesh_transparent])
+    return merged_mesh
+
+
 class Logger:
     def __init__(self, opts):
         super(Logger, self).__init__()
@@ -83,15 +96,13 @@ class Logger:
 
             # control reference
             control_ref = data["control_ref"][frame]
-            img = self.render_wdw(control_ref, camera=camera)
+            merged_mesh = merge_mesh(control_ref, target)
+            img = self.render_wdw(merged_mesh, camera=camera)
             self.rendered_imgs["control_ref"].append(img)
 
             # simulated
             sim_traj = data["sim_traj"][frame]
-            transparent_colors = target.visual.vertex_colors.copy()
-            transparent_colors[:] = 64
-            target.visual.vertex_colors = transparent_colors
-            merged_mesh = trimesh.util.concatenate([sim_traj, target])
+            merged_mesh = merge_mesh(sim_traj, target)
             img = self.render_wdw(merged_mesh, camera=camera)
             self.rendered_imgs["sim"].append(img)
 

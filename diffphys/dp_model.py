@@ -24,7 +24,7 @@ from diffphys.dp_utils import (
     rotate_frame,
     rotate_frame_vel,
     compute_com,
-    clip_loss,
+    reduce_loss,
     se3_loss,
     can2gym2gl,
     remove_nan,
@@ -722,16 +722,16 @@ class phys_model(nn.Module):
         # targeting loss
         loss_traj = se3_loss(sim_position, target_position).mean(-1)
         loss_traj[outseq_idx] = 0
-        loss_dict["traj"] = clip_loss(loss_traj)
+        loss_dict["traj"] = reduce_loss(loss_traj, clip=True)
 
         # queried state matching loss
-        loss_pos_state = se3_loss(queried_position, sim_position).mean(-1)[:, 1:]
-        loss_pos_state[outseq_idx[:, 1:]] = 0
-        loss_dict["pos_state"] = clip_loss(loss_pos_state)
+        loss_pos_state = se3_loss(queried_position, target_position).mean(-1)
+        loss_pos_state[outseq_idx] = 0
+        loss_dict["pos_state"] = reduce_loss(loss_pos_state)
 
-        loss_vel_state = se3_loss(queried_velocity, sim_velocity).mean(-1)[:, 1:]
-        loss_vel_state[outseq_idx[:, 1:]] = 0
-        loss_dict["vel_state"] = clip_loss(loss_vel_state)
+        loss_vel_state = se3_loss(queried_velocity, sim_velocity).mean(-1)
+        loss_vel_state[outseq_idx] = 0
+        loss_dict["vel_state"] = reduce_loss(loss_vel_state)
 
         # regularization
         loss_dict["reg_torque"] = torques.pow(2).mean()
@@ -867,11 +867,12 @@ class phys_model(nn.Module):
         print("grad_norm: %.2f" % grad_norm)
         if grad_norm > thresh:
             # clear gradients
+            print("large grad: %.2f, clear gradients" % grad_norm)
             self.optimizer.zero_grad()
             # load cached model from two rounds ago
             if self.model_cache[0] is not None:
                 if get_local_rank() == 0:
-                    print("large grad: %.2f, resume from cached weights" % grad_norm)
+                    print("fallback to cached model")
                 self.load_state_dict(self.model_cache[0])
                 self.optimizer.load_state_dict(self.optimizer_cache[0])
                 self.scheduler.load_state_dict(self.scheduler_cache[0])

@@ -78,18 +78,19 @@ def compute_com(body_q, part_com, part_mass):
     return com
 
 
-def clip_loss(loss_seq, th=0):
+def reduce_loss(loss_seq, clip=False, th=0):
     """
     bs,T
     """
-    for i in range(len(loss_seq)):
-        if th == 0:
-            loss_sub = loss_seq[i]
-            th = loss_sub[loss_sub > 0].median() * 10
-        clip_val, clip_idx = torch.max(loss_seq[i] > th, 0)
-        if clip_val == 1:
-            loss_seq[i, clip_idx:] = 0
-            print("clipped env %d at %d" % (i, clip_idx))
+    if clip:
+        for i in range(len(loss_seq)):
+            if th == 0:
+                loss_sub = loss_seq[i]
+                th = loss_sub[loss_sub > 0].median() * 10
+            clip_val, clip_idx = torch.max(loss_seq[i] > th, 0)
+            if clip_val == 1:
+                loss_seq[i, clip_idx:] = 0
+                print("clipped env %d at %d" % (i, clip_idx))
     if loss_seq.sum() > 0:
         loss_seq = loss_seq[loss_seq > 0].mean()
     else:
@@ -120,7 +121,7 @@ def se3_loss(pred, gt, rot_ratio=0.1):
         rot_gti = dqtorch.quaternion_to_matrix(rot_gti)
     rot_loss = rot_angle(rot_pred @ rot_gti)
 
-    loss = 0.1 * trn_loss + 0.1 * rot_loss * rot_ratio
+    loss = trn_loss + rot_loss * rot_ratio
     loss[nanid] = 0
     return loss
 
