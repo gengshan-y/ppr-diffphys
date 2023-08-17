@@ -89,7 +89,7 @@ class Logger:
             # simulated
             sim_traj = data["sim_traj"][frame]
             transparent_colors = target.visual.vertex_colors.copy()
-            transparent_colors[:, 3] = 64
+            transparent_colors[:] = 64
             target.visual.vertex_colors = transparent_colors
             merged_mesh = trimesh.util.concatenate([sim_traj, target])
             img = self.render_wdw(merged_mesh, camera=camera)

@@ -59,7 +59,7 @@ def main(_):
         # eval
         if it % opts["iters_per_round"] == 0:
             # save net
-            model.save_network(epoch_label=it)
+            model.save_checkpoint(round_count=it)
 
             # inference
             model.reinit_envs(1, frames_per_wdw=model.total_frames, is_eval=True)

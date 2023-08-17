@@ -6,6 +6,7 @@ import pdb
 import numpy as np
 import scipy.interpolate
 from scipy.spatial.transform import Rotation as R
+from copy import deepcopy
 
 from diffphys.dataloader import parse_amp
 from diffphys.robot import URDFRobot
@@ -197,6 +198,11 @@ class phys_model(nn.Module):
         # optimizer
         self.add_optimizer(opts)
 
+        # cache queue of length 2
+        self.model_cache = [None, None]
+        self.optimizer_cache = [None, None]
+        self.scheduler_cache = [None, None]
+
     def init_global_q(self):
         # necessary for fk
         self.frame2step = [0]
@@ -210,7 +216,7 @@ class phys_model(nn.Module):
         self.global_q = torch.tensor([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0])
         steps_fr = torch.tensor([[0]])
 
-        _, _, queried_q, queried_qd, _, _, _ = self.get_batch_input(steps_fr)
+        _, _, queried_q, queried_qd, _, _ = self.get_batch_input(steps_fr)
 
         queried_position, _, _ = ForwardKinematics.apply(
             queried_q[:, None], queried_qd[:, None], self.env
@@ -432,6 +438,7 @@ class phys_model(nn.Module):
         )
 
     def update(self):
+        self.check_grad()
         self.optimizer.step()
         self.scheduler.step()
         self.optimizer.zero_grad()
@@ -614,15 +621,7 @@ class phys_model(nn.Module):
             queried_q, queried_ja, queried_qd, torques, res_f
         )
 
-        return (
-            target_position,
-            ref_ja,
-            queried_q,
-            queried_qd,
-            torques,
-            res_f,
-            target_q[:, 0],
-        )
+        return (target_position, ref_ja, queried_q, queried_qd, torques, res_f)
 
     def forward(self, frame_start=None):
         # capture requires cuda memory to be pre-allocated
@@ -653,14 +652,11 @@ class phys_model(nn.Module):
             queried_qd,
             torques,
             res_f,
-            target_q_init,
         ) = self.get_batch_input(steps_fr)
 
         # forward simulation
         res_fin = res_f.clone()
         q_init = queried_q[0]  # bs*7+dof
-        q_init = q_init.view(self.num_envs, -1)
-        q_init[:, :7] = target_q_init
         q_init = q_init.reshape(-1)
         qd_init = queried_qd[0]
         if self.training:
@@ -833,10 +829,19 @@ class phys_model(nn.Module):
             data["img_size"] = img_size
         return data
 
-    def save_network(self, epoch_label):
+    def save_checkpoint(self, round_count):
+        # move to the left
+        self.model_cache[0] = self.model_cache[1]
+        self.optimizer_cache[0] = self.optimizer_cache[1]
+        self.scheduler_cache[0] = self.scheduler_cache[1]
+        # enqueue
+        self.model_cache[1] = deepcopy(self.state_dict())
+        self.optimizer_cache[1] = deepcopy(self.optimizer.state_dict())
+        self.scheduler_cache[1] = deepcopy(self.scheduler.state_dict())
+
         if self.opts["local_rank"] == 0:
-            save_dict = self.state_dict()
-            param_path = "%s/params_%03d.pth" % (self.save_dir, epoch_label)
+            save_dict = self.model_cache[1]
+            param_path = "%s/ckpt_phys_%04d.pth" % (self.save_dir, round_count)
             torch.save(save_dict, param_path)
 
             return
@@ -844,6 +849,32 @@ class phys_model(nn.Module):
     def load_network(self, model_path):
         states = torch.load(model_path, map_location="cpu")
         self.load_state_dict(states, strict=False)
+
+    def check_grad(self, thresh=1.0):
+        """Check if gradients are above a threshold
+
+        Args:
+            thresh (float): Gradient clipping threshold
+        """
+        # parameters that are sensitive to large gradients
+
+        param_list = []
+        for name, p in self.named_parameters():
+            if p.requires_grad:
+                param_list.append(p)
+
+        grad_norm = torch.nn.utils.clip_grad_norm_(param_list, thresh)
+        print("grad_norm: %.2f" % grad_norm)
+        if grad_norm > thresh:
+            # clear gradients
+            self.optimizer.zero_grad()
+            # load cached model from two rounds ago
+            if self.model_cache[0] is not None:
+                if get_local_rank() == 0:
+                    print("large grad: %.2f, resume from cached weights" % grad_norm)
+                self.load_state_dict(self.model_cache[0])
+                self.optimizer.load_state_dict(self.optimizer_cache[0])
+                self.scheduler.load_state_dict(self.scheduler_cache[0])
 
 
 class ForwardKinematics(torch.autograd.Function):

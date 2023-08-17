@@ -160,15 +160,7 @@ class phys_interface(phys_model):
             queried, ref_ja, queried_qd, torques, res_f
         )
 
-        return (
-            target_position,
-            ref_ja,
-            queried_q,
-            queried_qd,
-            torques,
-            res_f,
-            batch["target_q"][:, 0],
-        )
+        return (target_position, ref_ja, queried_q, queried_qd, torques, res_f)
 
     def get_foot_height(self, state_body_q):
         kp_idxs = [
