@@ -800,7 +800,7 @@ class phys_model(nn.Module):
 
             world2view = obj2view @ world2obj
             data["camera"] = world2view.detach().cpu().numpy()
-            data["camera"][:, 3] = self.ks_vis[0].cpu().numpy()
+            data["camera"][:, 3] = self.ks_vis[0].detach().cpu().numpy()
             data["img_size"] = img_size
         return data
 

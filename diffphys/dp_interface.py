@@ -116,24 +116,24 @@ class phys_interface(phys_model):
         batch["target_q"], batch["obj2view"] = query_q(
             steps_fr, self.object_field, self.scene_field
         )
-        with torch.no_grad():
-            batch["target_ja"] = query_ja(
-                steps_fr, self.object_field.warp.articulation, self.env, self.robot
-            )
-            batch["target_qd"] = torch.zeros_like(batch["target_q"])[..., :6]
-            batch["target_jad"] = torch.zeros_like(batch["target_ja"])
-            batch["ks"] = self.intrinsics.get_vals(steps_fr.reshape(-1).long())
-            for k, v in batch.items():
-                shape = v.shape
-                batch[k] = v.reshape((bs, n_fr) + shape[1:])
+        # with torch.no_grad():
+        batch["target_ja"] = query_ja(
+            steps_fr, self.object_field.warp.articulation, self.env, self.robot
+        )
+        batch["target_qd"] = torch.zeros_like(batch["target_q"])[..., :6]
+        batch["target_jad"] = torch.zeros_like(batch["target_ja"])
+        batch["ks"] = self.intrinsics.get_vals(steps_fr.reshape(-1).long())
+        for k, v in batch.items():
+            shape = v.shape
+            batch[k] = v.reshape((bs, n_fr) + shape[1:])
         return batch
 
     def override_states(self):
         self.kinematics_proxy.override_states(self.object_field, self.scene_field)
-        # reset the estimations of velocity, additional torques, residual forces
-        # as the control reference has changed
-        self.torque_mlp.reinit()
-        self.residual_f_mlp.reinit()
+        # # reset the estimations of velocity, additional torques, residual forces
+        # # as the control reference has changed
+        # self.torque_mlp.reinit()
+        # self.residual_f_mlp.reinit()
 
     def override_states_inv(self):
         self.kinematics_proxy.override_states_inv(self.object_field, self.scene_field)
