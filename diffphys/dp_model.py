@@ -136,6 +136,7 @@ class phys_model(nn.Module):
         # limit_ke=1.e+4, # useful when joints violating limits
         # limit_kd=1.e+1)
 
+        # for human and wolf
         if hasattr(self.robot.urdf, "kp_links"):
             # make feet heavier
             name2link_idx = [
@@ -154,8 +155,6 @@ class phys_model(nn.Module):
             #                'link_138_Brust_Y', 'link_139_Hals_Y']:
             #    kp_idx = name2link_idx[kp_name]
             #    self.articulation_builder.body_mass[kp_idx] *= 1./10
-
-            # for human and wolf
             for i in range(len(self.articulation_builder.body_mass)):
                 self.articulation_builder.body_mass[i] = 2
             for kp_name in self.robot.urdf.kp_links:
@@ -1087,8 +1086,6 @@ class ForwardWarp(torch.autograd.Function):
         grad = [wp.to_torch(v) for k, v in ctx.tape.gradients.items()]
         max_grad = torch.cat([i.reshape(-1) for i in grad]).abs().max()
         # print("max grad:", max_grad)
-        if max_grad == 0:
-            pdb.set_trace()
 
         if ctx.q_init.requires_grad:
             q_init_grad = wp.to_torch(ctx.tape.gradients[ctx.q_init]).clone()
