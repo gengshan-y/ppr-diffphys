@@ -9,6 +9,7 @@ import dqtorch
 from diffphys.dp_model import phys_model
 from diffphys.geom_utils import fid_reindex, se3_mat2vec, quaternion_to_axis_angle
 from diffphys.torch_utils import compute_gradient
+from diffphys.dp_utils import compose_delta
 
 
 class phys_interface(phys_model):
@@ -33,15 +34,16 @@ class phys_interface(phys_model):
     def add_nn_modules(self):
         super().add_nn_modules()
         # optimized
-        self.kinematics_proxy = KinematicsProxy(self.object_field, self.scene_field)
+        self.kinematics_proxy = KinematicsProxy(
+            self.object_field,
+            self.scene_field,
+            self.root_pose_mlp,
+            self.joint_angle_mlp,
+        )
         del self.root_pose_mlp
         del self.joint_angle_mlp
         self.root_pose_mlp = lambda x: self.kinematics_proxy(x)
-        self.joint_angle_mlp = (
-            lambda x: self.kinematics_proxy.object_field.warp.articulation.get_vals(
-                x, return_so3=True
-            )
-        )
+        self.joint_angle_mlp = lambda x: self.kinematics_proxy.get_joint_angles(x)
 
         # def vel_mlp(steps_fr):
         #     def get_xyz_so3(steps_fr):
@@ -87,18 +89,19 @@ class phys_interface(phys_model):
                 "object_field": lr_zero,
                 "scene_field": lr_zero,
                 "intrinsics": lr_zero,
-                "kinematics_proxy": lr_base,
+                "kinematics_proxy.delta_root_mlp": lr_base,
+                "kinematics_proxy.delta_joint_angle_mlp": lr_base,
             }
         )
         param_lr_with.update(
             {
                 # "kinematics_proxy.object_field.logscale": lr_explicit,
-                "kinematics_proxy.object_field.camera_mlp.base_quat": lr_explicit,
+                # "kinematics_proxy.object_field.camera_mlp.base_quat": lr_explicit,
                 "kinematics_proxy.object_field.warp.articulation.logscale": lr_explicit,
                 "kinematics_proxy.object_field.warp.articulation.shift": lr_explicit,
                 "kinematics_proxy.object_field.warp.articulation.orient": lr_explicit,
                 # "kinematics_proxy.scene_field.logscale": lr_explicit,
-                "kinematics_proxy.scene_field.camera_mlp.base_quat": lr_explicit,
+                # "kinematics_proxy.scene_field.camera_mlp.base_quat": lr_explicit,
                 "object_field.logscale": lr_explicit,
                 "scene_field.logscale": lr_explicit,
             }
@@ -160,6 +163,10 @@ class phys_interface(phys_model):
         return frame_start
 
     def get_batch_input(self, steps_fr):
+        # print("object scale:", self.object_field.logscale.exp())
+        # print("scene scale:", self.scene_field.logscale.exp())
+        # print("proxy object scale:", self.kinematics_proxy.object_field.logscale.exp())
+        # print("proxy scene scale:", self.kinematics_proxy.scene_field.logscale.exp())
         batch = self.query_kinematics_groundtruth(steps_fr)
         target_position, target_velocity, self.target_trajs = self.fk_pos_vel(
             batch["target_q"][:, self.frame2step],
@@ -218,13 +225,19 @@ class phys_interface(phys_model):
 
 
 class KinematicsProxy(nn.Module):
-    def __init__(self, object_field, scene_field):
+    def __init__(
+        self, object_field, scene_field, delta_root_mlp, delta_joint_angle_mlp
+    ):
         super(KinematicsProxy, self).__init__()
         self.object_field = copy.deepcopy(object_field)
         self.scene_field = copy.deepcopy(scene_field)
+        self.delta_root_mlp = copy.deepcopy(delta_root_mlp)
+        self.delta_joint_angle_mlp = copy.deepcopy(delta_joint_angle_mlp)
 
     def forward(self, x):
         out, _ = query_q(x, self.object_field, self.scene_field)
+        delta_q = self.delta_root_mlp(x)
+        out = compose_delta(out, delta_q)
         return out
 
     def override_states(self, object_field, scene_field):
@@ -253,6 +266,11 @@ class KinematicsProxy(nn.Module):
 
         object_field.load_state_dict(self.object_field.state_dict())
         scene_field.load_state_dict(self.scene_field.state_dict())
+
+    def get_joint_angles(self, x):
+        out = self.object_field.warp.articulation.get_vals(x, return_so3=True)
+        out = out + self.delta_joint_angle_mlp(x).view(out.shape)
+        return out
 
 
 def query_q(steps_fr, object_field, scene_field):

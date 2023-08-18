@@ -17,6 +17,18 @@ from diffphys.urdf_utils import (
 )
 
 
+def compose_delta(target_q, delta_root):
+    """
+    target_q: bs, T, 7
+    delta_root: bs, T, 6
+    """
+    delta_qmat = se3_vec2mat(delta_root)
+    target_qmat = se3_vec2mat(target_q)
+    target_qmat = delta_qmat @ target_qmat
+    target_q = se3_mat2vec(target_qmat)
+    return target_q
+
+
 def zero_grad_list(paramlist):
     """
     Clears the gradients of all optimized :class:`torch.Tensor`

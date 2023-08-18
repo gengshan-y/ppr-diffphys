@@ -29,6 +29,7 @@ from diffphys.dp_utils import (
     can2gym2gl,
     remove_nan,
     bullet2gl,
+    compose_delta,
 )
 from diffphys.torch_utils import TimeMLPOld, TimeMLPWrapper, CameraMLPWrapper
 
@@ -442,18 +443,6 @@ class phys_model(nn.Module):
         self.scheduler.step()
         self.optimizer.zero_grad()
 
-    @staticmethod
-    def compose_delta(target_q, delta_root):
-        """
-        target_q: bs, T, 7
-        delta_root: bs, T, 6
-        """
-        delta_qmat = se3_vec2mat(delta_root)
-        target_qmat = se3_vec2mat(target_q)
-        target_qmat = delta_qmat @ target_qmat
-        target_q = se3_mat2vec(target_qmat)
-        return target_q
-
     def get_net_pred(self, steps_fr):
         """
         steps_fr: bs,T
@@ -587,7 +576,7 @@ class phys_model(nn.Module):
         ) = self.get_net_pred(steps_fr)
 
         # refine
-        queried_q = self.compose_delta(target_q, delta_q)  # delta x target
+        queried_q = compose_delta(target_q, delta_q)  # delta x target
         # queried_q = delta_q  # delta x target
         queried_ja = target_ja + delta_ja
 
