@@ -151,22 +151,23 @@ class phys_model(nn.Module):
                 if it in dict_unique_body.values()
             ]
             name2link_idx = dict(name2link_idx)
-            # lighter trunk
-            # for kp_name in ['link_136_Bauch_Y', 'link_137_Bauch.001_Y',
-            #                'link_138_Brust_Y', 'link_139_Hals_Y']:
-            #    kp_idx = name2link_idx[kp_name]
-            #    self.articulation_builder.body_mass[kp_idx] *= 1./10
-            for i in range(len(self.articulation_builder.body_mass)):
-                self.articulation_builder.body_mass[i] = 2
-            for kp_name in self.robot.urdf.kp_links:
-                kp_idx = name2link_idx[kp_name]
-                self.articulation_builder.body_mass[kp_idx] *= 2
-                tup = self.articulation_builder.shape_geo_scale[kp_idx]
-                self.articulation_builder.shape_geo_scale[kp_idx] = (
-                    tup[0] * 2,
-                    tup[1] * 2,
-                    tup[2] * 2,
-                )
+
+            # re-assign mass
+            for name, idx in name2link_idx.items():
+                tup = self.articulation_builder.shape_geo_scale[idx]
+                # link_weight = 1000 * np.prod(tup)
+                # link_weight = np.max((1.0, link_weight))  # avoid sim blow up
+                # link_weight = np.min((5.0, link_weight))  # avoid too heavy
+                link_weight = 1.0
+                self.articulation_builder.body_mass[idx] = link_weight
+                # make feet longer and slighter heavier
+                if name in self.robot.urdf.kp_links:
+                    self.articulation_builder.shape_geo_scale[idx] = (
+                        tup[0] * 2,
+                        tup[1] * 2,
+                        tup[2] * 2,
+                    )
+                    self.articulation_builder.body_mass[idx] * 2
 
         self.n_dof = len(self.articulation_builder.joint_q) - 7
         self.n_links = len(self.articulation_builder.body_q)

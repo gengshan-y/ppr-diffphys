@@ -120,9 +120,9 @@ class phys_interface(phys_model):
         )
         return param_lr_startwith, param_lr_with
 
-    def reinit_envs(self, num_envs, frames_per_wdw, is_eval=False, overwrite=False):
-        super().reinit_envs(num_envs, frames_per_wdw, is_eval, overwrite)
-        self.env.gravity[1] = -5.0
+    # def reinit_envs(self, num_envs, frames_per_wdw, is_eval=False, overwrite=False):
+    #     super().reinit_envs(num_envs, frames_per_wdw, is_eval, overwrite)
+    #     self.env.gravity[1] = -5.0
 
     def query_kinematics_groundtruth(self, steps_fr):
         bs, n_fr = steps_fr.shape
