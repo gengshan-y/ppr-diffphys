@@ -35,6 +35,7 @@ from diffphys.torch_utils import TimeMLPOld, TimeMLPWrapper, CameraMLPWrapper
 
 sys.path.append("%s/../../../../" % os.path.dirname(__file__))
 from lab4d.utils.numpy_utils import interp_wt
+from lab4d.engine.train_utils import match_param_name
 
 import warp as wp
 
@@ -397,31 +398,7 @@ class phys_model(nn.Module):
         return param_lr_startwith, param_lr_with
 
     def add_optimizer(self, opts):
-        param_lr_startwith, param_lr_with = self.get_lr_dict()
-        params_list = []
-        lr_list = []
-        for name, p in self.named_parameters():
-            name_found = False
-            for params_name, lr in param_lr_with.items():
-                if params_name in name:
-                    params_list.append({"params": p})
-                    lr_list.append(lr)
-                    name_found = True
-                    if get_local_rank() == 0:
-                        print(name, p.shape, lr)
-
-            if name_found:
-                continue
-            for params_name, lr in param_lr_startwith.items():
-                if name.startswith(params_name):
-                    params_list.append({"params": p})
-                    lr_list.append(lr)
-                    name_found = True
-                    if get_local_rank() == 0:
-                        print(name, p.shape, lr)
-            if name_found is False:
-                if get_local_rank() == 0:
-                    print(name, "not found")
+        self.params_ref_list, params_list, lr_list = self.get_optimizable_param_list()
 
         self.optimizer = torch.optim.AdamW(
             params_list, lr=opts["learning_rate"], weight_decay=1e-4
@@ -437,6 +414,36 @@ class phys_model(nn.Module):
             final_div_factor=1.0,
             div_factor=25,
         )
+
+    def get_optimizable_param_list(self):
+        """
+        Get the optimizable param list
+        Returns:
+            params_ref_list (List): List of params
+            params_list (List): List of params
+            lr_list (List): List of learning rates
+        """
+        param_lr_startwith, param_lr_with = self.get_lr_dict()
+        params_ref_list = []
+        params_list = []
+        lr_list = []
+
+        for name, p in self.named_parameters():
+            matched, lr = match_param_name(name, param_lr_with, type="with")
+            if not matched:
+                matched, lr = match_param_name(
+                    name, param_lr_startwith, type="startwith"
+                )
+            if matched:
+                params_ref_list.append({name: p})
+                params_list.append({"params": p})
+                lr_list.append(lr)
+                if get_local_rank() == 0:
+                    print(name, p.shape, lr)
+            # else:
+            #     print(name, "not found")
+
+        return params_ref_list, params_list, lr_list
 
     def update(self):
         self.check_grad()
@@ -693,9 +700,9 @@ class phys_model(nn.Module):
         loss_pos_state[outseq_idx] = 0
         loss_dict["pos_state"] = reduce_loss(loss_pos_state)
 
-        loss_vel_state = se3_loss(queried_velocity, sim_velocity).mean(-1)
-        loss_vel_state[outseq_idx] = 0
-        loss_dict["vel_state"] = reduce_loss(loss_vel_state)
+        # loss_vel_state = se3_loss(queried_velocity, sim_velocity).mean(-1)
+        # loss_vel_state[outseq_idx] = 0
+        # loss_dict["vel_state"] = reduce_loss(loss_vel_state)
 
         # regularization
         loss_dict["reg_torque"] = torques.pow(2).mean()
@@ -821,15 +828,15 @@ class phys_model(nn.Module):
             thresh (float): Gradient clipping threshold
         """
         # parameters that are sensitive to large gradients
-
-        param_list = []
-        for name, p in self.named_parameters():
+        params_list = []
+        for param_dict in self.params_ref_list:
+            ((name, p),) = param_dict.items()
             if p.requires_grad:
-                param_list.append(p)
+                params_list.append(p)
 
-        grad_norm = torch.nn.utils.clip_grad_norm_(param_list, thresh)
+        grad_norm = torch.nn.utils.clip_grad_norm_(params_list, thresh)
         print("grad_norm: %.2f" % grad_norm)
-        if grad_norm > thresh:
+        if grad_norm > thresh or grad_norm.isnan():
             # clear gradients
             print("large grad: %.2f, clear gradients" % grad_norm)
             self.optimizer.zero_grad()
@@ -1043,6 +1050,21 @@ class ForwardWarp(torch.autograd.Function):
         return wp_pos, wp_vel
 
     @staticmethod
+    def zero_large_grads(grad_threshold=1.0):
+        # zero large grads
+        grad = [wp.to_torch(v) for k, v in ctx.tape.gradients.items()]
+        grad_norm = torch.cat([i.reshape(-1) for i in grad]).norm(2, -1)
+        print("warp grad_norm: %.2f" % grad_norm)
+        if grad_norm > grad_threshold or grad_norm.isnan():
+            if grad_norm.isnan():
+                pdb.set_trace()
+                print(adj_body_qs.reshape(21, 64, 26, -1)[0, :, 0, 0])
+
+            print("large grad in warp backward: %.2f, clear gradients" % grad_norm)
+            for k, v in ctx.tape.gradients.items():
+                v.zero_()
+
+    @staticmethod
     def backward(ctx, adj_body_qs, adj_body_qd):
         """
         input: gradient to
@@ -1051,6 +1073,7 @@ class ForwardWarp(torch.autograd.Function):
             q_init, qd_init, actions
         """
         # grad: torch to wp
+        grad_threshold = 1.0
         self = ctx.self
         frame = 1
         for step in self.frame2step[1:]:
@@ -1073,9 +1096,18 @@ class ForwardWarp(torch.autograd.Function):
         # return adjoint w.r.t. inputs
         ctx.tape.backward()
 
+        # zero large grads
         grad = [wp.to_torch(v) for k, v in ctx.tape.gradients.items()]
-        max_grad = torch.cat([i.reshape(-1) for i in grad]).abs().max()
-        # print("max grad:", max_grad)
+        grad_norm = torch.cat([i.reshape(-1) for i in grad]).norm(2, -1)
+        print("warp grad_norm: %.2f" % grad_norm)
+        if grad_norm > grad_threshold or grad_norm.isnan():
+            if grad_norm.isnan():
+                pdb.set_trace()
+                print(adj_body_qs.reshape(21, 64, 26, -1)[0, :, 0, 0])
+
+            print("large grad in warp backward: %.2f, clear gradients" % grad_norm)
+            for k, v in ctx.tape.gradients.items():
+                v.zero_()
 
         if ctx.q_init.requires_grad:
             q_init_grad = wp.to_torch(ctx.tape.gradients[ctx.q_init]).clone()

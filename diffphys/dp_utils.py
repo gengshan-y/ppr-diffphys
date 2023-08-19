@@ -39,7 +39,7 @@ def zero_grad_list(paramlist):
             p.grad.zero_()
 
 
-def remove_nan(q_init_grad, bs):
+def remove_nan(torch_var, bs, clip=False):
     """
     q_init_grad: bs*xxx
     """
@@ -49,12 +49,11 @@ def remove_nan(q_init_grad, bs):
     # q_init_grad[invalid_batch] = 0
     # q_init_grad = q_init_grad.reshape(original_shape)
     # clip grad
-    q_init_grad[q_init_grad.isnan()] = 0
-    clip_th = 0.01
-    q_init_grad[q_init_grad > clip_th] = clip_th
-    q_init_grad[q_init_grad < -clip_th] = -clip_th
-    if q_init_grad.isnan().sum() > 0:
-        pdb.set_trace()
+    torch_var[torch_var.isnan()] = 0
+    if clip:
+        clip_th = 0.01
+        torch_var[torch_var > clip_th] = clip_th
+        torch_var[torch_var < -clip_th] = -clip_th
 
 
 def rotate_frame(global_q, target_q):
@@ -134,6 +133,7 @@ def se3_loss(pred, gt, rot_ratio=0.1):
     rot_loss = rot_angle(rot_pred @ rot_gti)
 
     loss = trn_loss + rot_loss * rot_ratio
+    print("# nan frames", nanid.sum())
     loss[nanid] = 0
     return loss
 
