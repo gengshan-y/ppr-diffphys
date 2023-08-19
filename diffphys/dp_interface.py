@@ -10,6 +10,7 @@ from diffphys.dp_model import phys_model
 from diffphys.geom_utils import fid_reindex, se3_mat2vec, quaternion_to_axis_angle
 from diffphys.torch_utils import compute_gradient
 from diffphys.dp_utils import compose_delta
+from diffphys.torch_utils import TimeMLPOld
 
 
 class phys_interface(phys_model):
@@ -46,24 +47,34 @@ class phys_interface(phys_model):
         self.joint_angle_mlp = lambda x: self.kinematics_proxy.get_joint_angles(x)
 
         # def vel_mlp(steps_fr):
-        #     def get_xyz_so3(steps_fr):
+        #     # def get_so3_xyz(steps_fr):
+        #     #     xyz_quat = self.root_pose_mlp(steps_fr)
+        #     #     xyz = xyz_quat[..., :3]
+        #     #     quat = xyz_quat[..., 3:]
+        #     #     so3 = quaternion_to_axis_angle(quat)
+        #     #     return torch.cat([so3, xyz], -1)
+
+        #     def get_xyz(steps_fr):
         #         xyz_quat = self.root_pose_mlp(steps_fr)
         #         xyz = xyz_quat[..., :3]
-        #         quat = xyz_quat[..., 3:]
-        #         so3 = quaternion_to_axis_angle(quat)
-        #         return torch.cat([xyz, so3], -1)
+        #         return xyz
 
-        #     def get_joint_angles(steps_fr):
-        #         joint_angles = self.joint_angle_mlp(steps_fr)
-        #         joint_angles = joint_angles.view(joint_angles.shape[:-2] + (-1,))
-        #         return joint_angles
+        #     # def get_joint_angles(steps_fr):
+        #     #     joint_angles = self.joint_angle_mlp(steps_fr)
+        #     #     joint_angles = joint_angles.view(joint_angles.shape[:-2] + (-1,))
+        #     #     return joint_angles
 
         #     # OOM due to 75d output
-        #     state_qd = compute_gradient(get_xyz_so3, steps_fr)
-        #     state_jad = compute_gradient(get_joint_angles, steps_fr)
-        #     state_qd = torch.cat([state_qd, state_jad], -1) / self.frame_interval
+        #     # NOTE: in warp state_qd is v_so3, v_xyz, v_joints, state_q is xyz, quat, joints
+        #     state_qd = compute_gradient(get_xyz, steps_fr) / self.frame_interval
+        #     # state_jad = compute_gradient(get_joint_angles, steps_fr) / self.frame_interval
+        #     state_jad = self.jaq_mlp(steps_fr)
+        #     state_qd = torch.cat([state_jad[..., :3], state_qd, state_jad[..., 3:]], -1)
         #     return state_qd
 
+        # self.jaq_mlp = TimeMLPOld(
+        #     tscale=1.0 / self.total_frames, out_channels=3 + self.n_dof
+        # )
         # del self.vel_mlp
         # self.vel_mlp = vel_mlp
 
@@ -91,6 +102,7 @@ class phys_interface(phys_model):
                 "intrinsics": lr_zero,
                 "kinematics_proxy.delta_root_mlp": lr_base,
                 "kinematics_proxy.delta_joint_angle_mlp": lr_base,
+                # "jaq_mlp": lr_base,
             }
         )
         param_lr_with.update(

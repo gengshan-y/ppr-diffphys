@@ -18,6 +18,7 @@ from lab4d.utils.quat_transform import (
 )
 
 
+@torch.enable_grad()
 def compute_gradient(fn, x):
     """
     gradient of mlp params wrt pts
