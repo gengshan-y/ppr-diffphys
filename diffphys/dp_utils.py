@@ -133,7 +133,6 @@ def se3_loss(pred, gt, rot_ratio=0.1):
     rot_loss = rot_angle(rot_pred @ rot_gti)
 
     loss = trn_loss + rot_loss * rot_ratio
-    print("# nan frames", nanid.sum())
     loss[nanid] = 0
     return loss
 

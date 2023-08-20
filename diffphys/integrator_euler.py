@@ -74,6 +74,19 @@ def integrate_bodies(body_q: wp.array(dtype=wp.transform),
     # angular damping, todo: expose
     w1 = w1*(1.0-0.1*dt)
 
+    # TODO: clamp velocities
+    limit_val = 10.0
+    w1 = wp.vec3(
+        wp.clamp(w1[0], -limit_val, limit_val),
+        wp.clamp(w1[1], -limit_val, limit_val),
+        wp.clamp(w1[2], -limit_val, limit_val),
+    )
+    v1 = wp.vec3(
+        wp.clamp(v1[0], -limit_val, limit_val),
+        wp.clamp(v1[1], -limit_val, limit_val),
+        wp.clamp(v1[2], -limit_val, limit_val),
+    )
+
     body_q_new[tid] = wp.transform(x1 - wp.quat_rotate(r1, body_com[tid]), r1)
     body_qd_new[tid] = wp.spatial_vector(w1, v1)
 

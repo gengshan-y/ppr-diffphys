@@ -429,20 +429,23 @@ class phys_model(nn.Module):
         lr_list = []
 
         for name, p in self.named_parameters():
-            matched, lr = match_param_name(name, param_lr_with, type="with")
-            if not matched:
-                matched, lr = match_param_name(
-                    name, param_lr_startwith, type="startwith"
-                )
-            if matched:
+            matched_loose, lr_loose = match_param_name(name, param_lr_with, type="with")
+            matched_strict, lr_strict = match_param_name(
+                name, param_lr_startwith, type="startwith"
+            )
+            if matched_loose > 0:
+                lr = lr_loose  # higher priority
+            elif matched_strict > 0:
+                lr = lr_strict
+            else:
+                lr = 0.0  # not found
+                # print(name, "not found")
+            if lr > 0:
                 params_ref_list.append({name: p})
                 params_list.append({"params": p})
                 lr_list.append(lr)
                 if get_local_rank() == 0:
                     print(name, p.shape, lr)
-            # else:
-            #     print(name, "not found")
-
         return params_ref_list, params_list, lr_list
 
     def update(self):
@@ -835,7 +838,6 @@ class phys_model(nn.Module):
                 params_list.append(p)
 
         grad_norm = torch.nn.utils.clip_grad_norm_(params_list, thresh)
-        print("grad_norm: %.2f" % grad_norm)
         if grad_norm > thresh or grad_norm.isnan():
             # clear gradients
             print("large grad: %.2f, clear gradients" % grad_norm)
@@ -1050,21 +1052,6 @@ class ForwardWarp(torch.autograd.Function):
         return wp_pos, wp_vel
 
     @staticmethod
-    def zero_large_grads(grad_threshold=1.0):
-        # zero large grads
-        grad = [wp.to_torch(v) for k, v in ctx.tape.gradients.items()]
-        grad_norm = torch.cat([i.reshape(-1) for i in grad]).norm(2, -1)
-        print("warp grad_norm: %.2f" % grad_norm)
-        if grad_norm > grad_threshold or grad_norm.isnan():
-            if grad_norm.isnan():
-                pdb.set_trace()
-                print(adj_body_qs.reshape(21, 64, 26, -1)[0, :, 0, 0])
-
-            print("large grad in warp backward: %.2f, clear gradients" % grad_norm)
-            for k, v in ctx.tape.gradients.items():
-                v.zero_()
-
-    @staticmethod
     def backward(ctx, adj_body_qs, adj_body_qd):
         """
         input: gradient to
@@ -1094,12 +1081,12 @@ class ForwardWarp(torch.autograd.Function):
         )
 
         # return adjoint w.r.t. inputs
+        # be careful, this can modify the value of input gradients
         ctx.tape.backward()
 
         # zero large grads
         grad = [wp.to_torch(v) for k, v in ctx.tape.gradients.items()]
         grad_norm = torch.cat([i.reshape(-1) for i in grad]).norm(2, -1)
-        print("warp grad_norm: %.2f" % grad_norm)
         if grad_norm > grad_threshold or grad_norm.isnan():
             if grad_norm.isnan():
                 pdb.set_trace()
