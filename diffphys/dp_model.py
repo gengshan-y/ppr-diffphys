@@ -156,19 +156,28 @@ class phys_model(nn.Module):
             # re-assign mass
             for name, idx in name2link_idx.items():
                 tup = self.articulation_builder.shape_geo_scale[idx]
-                # link_weight = 1000 * np.prod(tup)
-                # link_weight = np.max((1.0, link_weight))  # avoid sim blow up
-                # link_weight = np.min((5.0, link_weight))  # avoid too heavy
-                link_weight = 1.0
-                self.articulation_builder.body_mass[idx] = link_weight
-                # make feet longer and slighter heavier
+                # make feet longer
                 if name in self.robot.urdf.kp_links:
                     self.articulation_builder.shape_geo_scale[idx] = (
                         tup[0] * 2,
                         tup[1] * 2,
                         tup[2] * 2,
                     )
-                    self.articulation_builder.body_mass[idx] * 2
+                    # self.articulation_builder.body_mass[idx] *= 2
+                    self.articulation_builder.body_mass[idx] *= 2**3
+                    self.articulation_builder.body_inertia[idx] *= 2**5
+
+                # normalized inertia to be only a factor of geometry ~= mx^2/6
+                self.articulation_builder.body_inertia[
+                    idx
+                ] /= self.articulation_builder.body_mass[idx]
+
+                # initialize link weight to a different value
+                # link_weight = 1000 * np.prod(tup)
+                # link_weight = np.max((1.0, link_weight))  # avoid sim blow up
+                # link_weight = np.min((5.0, link_weight))  # avoid too heavy
+                link_weight = 1.0
+                self.articulation_builder.body_mass[idx] = link_weight
 
         self.n_dof = len(self.articulation_builder.joint_q) - 7
         self.n_links = len(self.articulation_builder.body_q)
@@ -190,6 +199,10 @@ class phys_model(nn.Module):
         )
         self.body_mass = nn.Parameter(
             torch.tensor(self.articulation_builder.body_mass, dtype=torch.float32)
+        )
+        self.register_buffer(
+            "norm_body_inertia",
+            torch.tensor(self.articulation_builder.body_inertia, dtype=torch.float32),
         )
 
         self.add_nn_modules()
@@ -377,7 +390,7 @@ class phys_model(nn.Module):
         # define a dict for (tensor_name, learning) pair
         opts = self.opts
         lr_base = opts["learning_rate"]
-        lr_explicit = lr_base * 10
+        lr_explicit = lr_base * 50
 
         param_lr_startwith = {
             "global_q": lr_explicit,
@@ -656,6 +669,11 @@ class phys_model(nn.Module):
         target_ke = self.target_ke[None].repeat(self.num_envs, 1).view(-1)
         target_kd = self.target_kd[None].repeat(self.num_envs, 1).view(-1)
         body_mass = self.body_mass[None].repeat(self.num_envs, 1).view(-1)
+        body_inv_mass = 1.0 / body_mass
+        body_inertia = (
+            self.norm_body_inertia[None].repeat(self.num_envs, 1, 1, 1).view(-1, 3, 3)
+        ) * body_mass[..., None, None]
+        body_inv_inertia = body_inertia.inverse().contiguous()
         sim_position, sim_velocity = ForwardWarp.apply(
             q_init,
             qd_init,
@@ -665,6 +683,9 @@ class phys_model(nn.Module):
             target_ke,
             target_kd,
             body_mass,
+            body_inv_mass,
+            body_inertia,
+            body_inv_inertia,
             self,
         )
 
@@ -839,16 +860,19 @@ class phys_model(nn.Module):
 
         grad_norm = torch.nn.utils.clip_grad_norm_(params_list, thresh)
         if grad_norm > thresh or grad_norm.isnan():
-            # clear gradients
             print("large grad: %.2f, clear gradients" % grad_norm)
-            self.optimizer.zero_grad()
-            # load cached model from two rounds ago
-            if self.model_cache[0] is not None:
-                if get_local_rank() == 0:
-                    print("fallback to cached model")
-                self.load_state_dict(self.model_cache[0])
-                self.optimizer.load_state_dict(self.optimizer_cache[0])
-                self.scheduler.load_state_dict(self.scheduler_cache[0])
+            self.clear_grad()
+
+    def clear_grad(self):
+        # clear gradients
+        self.optimizer.zero_grad()
+        # load cached model from two rounds ago
+        if self.model_cache[0] is not None:
+            if get_local_rank() == 0:
+                print("fallback to cached model")
+            self.load_state_dict(self.model_cache[0])
+            self.optimizer.load_state_dict(self.optimizer_cache[0])
+            self.scheduler.load_state_dict(self.scheduler_cache[0])
 
 
 class ForwardKinematics(torch.autograd.Function):
@@ -972,6 +996,9 @@ class ForwardWarp(torch.autograd.Function):
         target_ke,
         target_kd,
         body_mass,
+        body_inv_mass,
+        body_inertia,
+        body_inv_inertia,
         self,
     ):
         """
@@ -995,7 +1022,12 @@ class ForwardWarp(torch.autograd.Function):
         ctx.refs = [wp.from_torch(i) for i in refs]
         ctx.target_ke = wp.from_torch(target_ke)
         ctx.target_kd = wp.from_torch(target_kd)
+
+        # mass
         ctx.body_mass = wp.from_torch(body_mass)
+        ctx.body_inv_mass = wp.from_torch(body_inv_mass)
+        ctx.body_inertia = wp.from_torch(body_inertia, dtype=wp.mat33)
+        ctx.body_inv_inertia = wp.from_torch(body_inv_inertia, dtype=wp.mat33)
 
         # aux
         ctx.self = self
@@ -1003,10 +1035,12 @@ class ForwardWarp(torch.autograd.Function):
         # forward
         ctx.tape = wp.Tape()
         with ctx.tape:
-            # TODO add kd/ke to optimization vars; not implemented by warp
             self.env.joint_target_kd = ctx.target_kd
             self.env.joint_target_ke = ctx.target_ke
             self.env.body_mass = ctx.body_mass
+            self.env.body_inv_mass = ctx.body_inv_mass
+            self.env.body_inertia = ctx.body_inertia
+            self.env.body_inv_inertia = ctx.body_inv_inertia
 
             # assign initial states
             eval_fk(self.env, ctx.q_init, ctx.qd_init, None, self.state_steps[0])
@@ -1084,17 +1118,18 @@ class ForwardWarp(torch.autograd.Function):
         # be careful, this can modify the value of input gradients
         ctx.tape.backward()
 
-        # zero large grads
-        grad = [wp.to_torch(v) for k, v in ctx.tape.gradients.items()]
-        grad_norm = torch.cat([i.reshape(-1) for i in grad]).norm(2, -1)
-        if grad_norm > grad_threshold or grad_norm.isnan():
-            if grad_norm.isnan():
-                pdb.set_trace()
-                print(adj_body_qs.reshape(21, 64, 26, -1)[0, :, 0, 0])
+        # # zero large grads
+        # grad = [wp.to_torch(v) for k, v in ctx.tape.gradients.items()]
+        # grad_norm = torch.cat([i.reshape(-1) for i in grad]).norm(2, -1)
+        # if grad_norm > grad_threshold or grad_norm.isnan():
+        #     # if grad_norm.isnan():
+        #     #     pdb.set_trace()
+        #     #     print(adj_body_qs.reshape(21, 64, 26, -1)[0, :, 0, 0])
 
-            print("large grad in warp backward: %.2f, clear gradients" % grad_norm)
-            for k, v in ctx.tape.gradients.items():
-                v.zero_()
+        #     print("large grad in warp backward: %.2f, clear gradients" % grad_norm)
+        #     ctx.self.clear_grad()
+        #     for k, v in ctx.tape.gradients.items():
+        #         v.zero_()
 
         if ctx.q_init.requires_grad:
             q_init_grad = wp.to_torch(ctx.tape.gradients[ctx.q_init]).clone()
@@ -1161,6 +1196,33 @@ class ForwardWarp(torch.autograd.Function):
             body_mass_grad = None
             print("body_mass does not require grad")
 
+        if ctx.body_inv_mass.requires_grad:
+            body_inv_mass_grad = wp.to_torch(
+                ctx.tape.gradients[ctx.body_inv_mass]
+            ).clone()
+            remove_nan(body_inv_mass_grad, self.num_envs)
+        else:
+            body_inv_mass_grad = None
+            print("body_inv_mass does not require grad")
+
+        if ctx.body_inertia.requires_grad:
+            body_inertia_grad = wp.to_torch(
+                ctx.tape.gradients[ctx.body_inertia]
+            ).clone()
+            remove_nan(body_inertia_grad, self.num_envs)
+        else:
+            body_inertia_grad = None
+            print("body_inertia does not require grad")
+
+        if ctx.body_inv_inertia.requires_grad:
+            body_inv_inertia_grad = wp.to_torch(
+                ctx.tape.gradients[ctx.body_inv_inertia]
+            ).clone()
+            remove_nan(body_inv_inertia_grad, self.num_envs)
+        else:
+            body_inv_inertia_grad = None
+            print("body_inv_inertia does not require grad")
+
         ctx.tape.zero()
         return (
             q_init_grad,
@@ -1171,5 +1233,8 @@ class ForwardWarp(torch.autograd.Function):
             target_ke_grad,
             target_kd_grad,
             body_mass_grad,
+            body_inv_mass_grad,
+            body_inertia_grad,
+            body_inv_inertia_grad,
             None,
         )
