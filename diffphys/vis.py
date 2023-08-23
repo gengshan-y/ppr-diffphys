@@ -49,6 +49,8 @@ class Logger:
 
         # create window
         self.rendered_imgs = {"target": [], "sim": [], "control_ref": []}
+        if "distilled_traj" in data.keys():
+            self.rendered_imgs["distilled"] = []
         if "vs" in data.keys():
             self.rendered_imgs["vs"] = []
         if "as" in data.keys():
@@ -105,6 +107,13 @@ class Logger:
             merged_mesh = merge_mesh(sim_traj, target)
             img = self.render_wdw(merged_mesh, camera=camera)
             self.rendered_imgs["sim"].append(img)
+
+            # distilled
+            if "distilled_traj" in data.keys():
+                distilled = data["distilled_traj"][frame]
+                merged_mesh = merge_mesh(distilled, target)
+                img = self.render_wdw(merged_mesh, camera=camera)
+                self.rendered_imgs["distilled"].append(img)
 
             # error
             if "err" in data.keys():

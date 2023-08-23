@@ -6,7 +6,7 @@ import numpy as np
 import torch.nn as nn
 import dqtorch
 
-from diffphys.dp_model import phys_model
+from diffphys.dp_model import phys_model, ForwardKinematics
 from diffphys.geom_utils import fid_reindex, se3_mat2vec, quaternion_to_axis_angle
 from diffphys.torch_utils import compute_gradient
 from diffphys.dp_utils import compose_delta
@@ -34,8 +34,15 @@ class phys_interface(phys_model):
 
     def add_nn_modules(self):
         super().add_nn_modules()
-        # optimized
+        # updated to minimize diff physics loss
         self.kinematics_proxy = KinematicsProxy(
+            self.object_field,
+            self.scene_field,
+            self.root_pose_mlp,
+            self.joint_angle_mlp,
+        )
+        # distilled from physics to regularize diff rendering
+        self.kinematics_distilled = KinematicsProxy(
             self.object_field,
             self.scene_field,
             self.root_pose_mlp,
@@ -45,6 +52,11 @@ class phys_interface(phys_model):
         del self.joint_angle_mlp
         self.root_pose_mlp = lambda x: self.kinematics_proxy(x)
         self.joint_angle_mlp = lambda x: self.kinematics_proxy.get_joint_angles(x)
+
+        self.root_pose_distilled = lambda x: self.kinematics_distilled(x)
+        self.joint_angle_distilled = (
+            lambda x: self.kinematics_distilled.get_joint_angles(x)
+        )
 
         # def vel_mlp(steps_fr):
         #     # def get_so3_xyz(steps_fr):
@@ -102,6 +114,8 @@ class phys_interface(phys_model):
                 "intrinsics": lr_zero,
                 "kinematics_proxy.delta_root_mlp": lr_base,
                 "kinematics_proxy.delta_joint_angle_mlp": lr_base,
+                "kinematics_distilled.delta_root_mlp": lr_base,
+                "kinematics_distilled.delta_joint_angle_mlp": lr_base,
                 # "jaq_mlp": lr_base,
             }
         )
@@ -112,6 +126,9 @@ class phys_interface(phys_model):
                 "kinematics_proxy.object_field.warp.articulation.logscale": lr_explicit,
                 "kinematics_proxy.object_field.warp.articulation.shift": lr_explicit,
                 "kinematics_proxy.object_field.warp.articulation.orient": lr_explicit,
+                "kinematics_distilled.object_field.warp.articulation.logscale": lr_explicit,
+                "kinematics_distilled.object_field.warp.articulation.shift": lr_explicit,
+                "kinematics_distilled.object_field.warp.articulation.orient": lr_explicit,
                 # "kinematics_proxy.scene_field.logscale": lr_explicit,
                 # "kinematics_proxy.scene_field.camera_mlp.base_quat": lr_explicit,
                 "object_field.logscale": lr_explicit,
@@ -145,13 +162,10 @@ class phys_interface(phys_model):
 
     def override_states(self):
         self.kinematics_proxy.override_states(self.object_field, self.scene_field)
-        # # reset the estimations of velocity, additional torques, residual forces
-        # # as the control reference has changed
-        # self.torque_mlp.reinit()
-        # self.residual_f_mlp.reinit()
+        self.kinematics_distilled.override_states(self.object_field, self.scene_field)
 
-    def override_states_inv(self):
-        self.kinematics_proxy.override_states_inv(self.object_field, self.scene_field)
+    # def override_states_inv(self):
+    #     self.kinematics_proxy.override_states_inv(self.object_field, self.scene_field)
 
     def compute_frame_start(self):
         frame_start = torch.Tensor(np.random.rand(self.num_envs)).to(self.device)
@@ -221,6 +235,7 @@ class phys_interface(phys_model):
         while True:
             self.object_field.logscale.data += increment
             self.kinematics_proxy.object_field.logscale.data += increment
+            self.kinematics_distilled.object_field.logscale.data += increment
             frame_ids = torch.arange(self.total_frames, device=self.device)
             batch = self.query_kinematics_groundtruth(frame_ids[None])
             _, _, target_trajs = self.fk_pos_vel(
@@ -234,6 +249,28 @@ class phys_interface(phys_model):
             print("foot height:", foot_height.min())
             if foot_height.min() > 0.0:
                 break
+
+    def get_distilled_kinematics(self, steps_fr):
+        steps_fr = steps_fr[:, self.frame2step]
+        bs, nstep = steps_fr.shape
+        distilled_root = self.root_pose_distilled(steps_fr.reshape(-1)).view(
+            bs, nstep, -1
+        )
+        distilled_ja = self.joint_angle_distilled(steps_fr.reshape(-1)).view(
+            bs, nstep, -1
+        )
+
+        # rearrange
+        distilled_q = torch.cat([distilled_root, distilled_ja], -1)
+        distilled_q = distilled_q.permute(1, 0, 2).reshape(nstep, -1)
+
+        # forward kiematics
+        distilled_q = distilled_q.reshape(self.frames_per_wdw, self.num_envs, -1)
+        distilled_qd = torch.zeros_like(distilled_q[..., :-1])
+        distilled_position, _, self.distilled_trajs = ForwardKinematics.apply(
+            distilled_q, distilled_qd, self.env
+        )
+        return distilled_position
 
 
 class KinematicsProxy(nn.Module):

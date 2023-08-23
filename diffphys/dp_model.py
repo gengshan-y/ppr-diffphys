@@ -350,7 +350,7 @@ class phys_model(nn.Module):
 
             # modify it to be local
             self.state_steps = []
-            for i in range(len(self.steps_idx) + 1):  # to include the last step
+            for i in range(len(self.steps_idx) + 1):  # add one more step for force vis
                 state = self.env.state(requires_grad=True)
                 self.state_steps.append(state)
 
@@ -724,6 +724,13 @@ class phys_model(nn.Module):
         loss_pos_state[outseq_idx] = 0
         loss_dict["pos_state"] = reduce_loss(loss_pos_state)
 
+        # proxy loss (used to regularize differentiable rendering)
+        if self.opts["pos_distill_wt"] > 0.0:
+            distilled_position = self.get_distilled_kinematics(steps_fr)
+            loss_distill = se3_loss(distilled_position, sim_position.detach()).mean(-1)
+            loss_distill[outseq_idx] = 0
+            loss_dict["pos_distill"] = reduce_loss(loss_distill)
+
         # loss_vel_state = se3_loss(queried_velocity, sim_velocity).mean(-1)
         # loss_vel_state[outseq_idx] = 0
         # loss_dict["vel_state"] = reduce_loss(loss_vel_state)
@@ -764,6 +771,7 @@ class phys_model(nn.Module):
         x_sims = []
         x_msms = []
         x_control_refs = []  # target
+        x_distilled_trajs = []
         com_k = []
         data = {}
 
@@ -800,6 +808,13 @@ class phys_model(nn.Module):
             x_sims.append(x_sim)
             x_msms.append(x_msm)
             x_control_refs.append(x_control_ref)
+
+            if hasattr(self, "distilled_trajs"):
+                distilled_traj = self.distilled_trajs[frame]
+                x_distilled = can2gym2gl(
+                    x_rest, distilled_traj, in_bullet=self.in_bullet, use_urdf=use_urdf
+                )
+                x_distilled_trajs.append(x_distilled)
         x_sims = np.stack(x_sims, 0)
         x_msms = np.stack(x_msms, 0)
         x_control_refs = np.stack(x_control_refs, 0)
@@ -807,6 +822,8 @@ class phys_model(nn.Module):
         data["sim_traj"] = x_sims  # simulation
         data["target_traj"] = x_msms  # reference trajectory
         data["control_ref"] = x_control_refs  # control target
+        if len(x_distilled_trajs) > 0:
+            data["distilled_traj"] = np.stack(x_distilled_trajs, 0)
         data["com_k"] = com_k
 
         if img_size is not None:
@@ -859,6 +876,7 @@ class phys_model(nn.Module):
                 params_list.append(p)
 
         grad_norm = torch.nn.utils.clip_grad_norm_(params_list, thresh)
+        print("grad_norm: %.6f" % grad_norm)
         if grad_norm > thresh or grad_norm.isnan():
             print("large grad: %.2f, clear gradients" % grad_norm)
             self.clear_grad()
@@ -941,6 +959,8 @@ class ForwardKinematics(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, adj_body_qs, adj_body_qd, _):
+        adj_body_qs = adj_body_qs.clone()
+        adj_body_qd = adj_body_qd.clone()
         for it in range(ctx.num_frames):
             grad_body_q = adj_body_qs[:, it].reshape(-1, 7)  # bs, T, -1, 7
             ctx.state_steps[it].body_q.grad = wp.from_torch(
@@ -982,6 +1002,18 @@ class ForwardKinematics(torch.autograd.Function):
 
         ctx.tape.zero()
         return (rj_q_grad, rj_qd_grad, None)
+
+
+@wp.kernel
+def wp_add(
+    a: wp.array(dtype=wp.spatial_vector),
+    b: wp.array(dtype=wp.spatial_vector),
+):
+    # get thread index
+    tid = wp.tid()
+
+    # write result back to memory
+    a[tid] = a[tid] + b[tid]
 
 
 class ForwardWarp(torch.autograd.Function):
@@ -1053,7 +1085,14 @@ class ForwardWarp(torch.autograd.Function):
 
                 self.env.joint_target = ctx.refs[step]
                 self.env.joint_act = ctx.torques[step]
-                self.state_steps[step].body_f = ctx.res_f[step]
+
+                # TODO force is modified in place
+                wp.launch(
+                    kernel=wp_add,
+                    dim=len(ctx.res_f[step]),
+                    inputs=[self.state_steps[step].body_f, ctx.res_f[step]],
+                    device=self.device,
+                )
 
                 grf, jaf = self.integrator.simulate(
                     self.env,
@@ -1069,18 +1108,16 @@ class ForwardWarp(torch.autograd.Function):
                     self.jafs.append(jaf)
 
             # get states
-            obs = self.state_steps[0].body_q
-            num_coords = obs.shape[0] // self.num_envs
-            self.sim_trajs = [obs.numpy()[:num_coords]]
-            wp_pos = [wp.to_torch(obs)]
-            wp_vel = [wp.to_torch(self.state_steps[0].body_qd)]
-
-            for step in self.frame2step[1:]:
+            self.sim_trajs = []
+            wp_pos = []
+            wp_vel = []
+            num_coords = self.state_steps[0].body_q.shape[0] // self.num_envs
+            for step in self.frame2step:
                 # for vis
-                obs = self.state_steps[step + 1].body_q
+                obs = self.state_steps[step].body_q
                 self.sim_trajs.append(obs.numpy()[:num_coords])
                 wp_pos.append(wp.to_torch(obs))
-                wp_vel.append(wp.to_torch(self.state_steps[step + 1].body_qd))
+                wp_vel.append(wp.to_torch(self.state_steps[step].body_qd))
             wp_pos = torch.stack(wp_pos, 0)
             wp_vel = torch.stack(wp_vel, 0)
         return wp_pos, wp_vel
@@ -1094,25 +1131,18 @@ class ForwardWarp(torch.autograd.Function):
             q_init, qd_init, actions
         """
         # grad: torch to wp
+        adj_body_qs = adj_body_qs.clone()
+        adj_body_qd = adj_body_qd.clone()
         grad_threshold = 1.0
         self = ctx.self
-        frame = 1
-        for step in self.frame2step[1:]:
-            # print('save to step: %d/from frame: %d'%(step, frame))
-            self.state_steps[step + 1].body_q.grad = wp.from_torch(
+        for frame, step in enumerate(self.frame2step):
+            # print("save grad from frame: %d to step: %d" % (step, frame))
+            self.state_steps[step].body_q.grad = wp.from_torch(
                 adj_body_qs[frame], dtype=wp.transform
             )
-            self.state_steps[step + 1].body_qd.grad = wp.from_torch(
+            self.state_steps[step].body_qd.grad = wp.from_torch(
                 adj_body_qd[frame], dtype=wp.spatial_vector
             )
-            frame += 1
-        # initial step
-        self.state_steps[0].body_q.grad = wp.from_torch(
-            adj_body_qs[0], dtype=wp.transform
-        )
-        self.state_steps[0].body_qd.grad = wp.from_torch(
-            adj_body_qd[0], dtype=wp.spatial_vector
-        )
 
         # return adjoint w.r.t. inputs
         # be careful, this can modify the value of input gradients
@@ -1121,6 +1151,10 @@ class ForwardWarp(torch.autograd.Function):
         # # zero large grads
         # grad = [wp.to_torch(v) for k, v in ctx.tape.gradients.items()]
         # grad_norm = torch.cat([i.reshape(-1) for i in grad]).norm(2, -1)
+        # max_grad = torch.cat([i.reshape(-1) for i in grad]).max()
+        # print("max grad in warp: %.6f" % max_grad)
+        # if max_grad > grad_threshold:
+        #     print("large grad in warp backward: %.6f, marked" % max_grad)
         # if grad_norm > grad_threshold or grad_norm.isnan():
         #     # if grad_norm.isnan():
         #     #     pdb.set_trace()
