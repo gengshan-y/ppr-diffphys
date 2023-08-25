@@ -24,7 +24,7 @@ class phys_interface(phys_model):
         self.intrinsics = model_dict["intrinsics"]
 
         self.frame_offset_raw = self.scene_field.frame_offset_raw
-        self.frame_interval = 0.1
+        self.frame_interval = model_dict["frame_interval"]
 
         # number of observations at end points and steps in each interval
         self.total_frames = self.frame_offset_raw[-1]
