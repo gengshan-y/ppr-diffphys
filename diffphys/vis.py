@@ -96,6 +96,11 @@ class Logger:
             img = self.render_wdw(target, camera=camera)
             self.rendered_imgs["target"].append(img)
 
+            # # DEBUG
+            # meshes = trimesh.util.concatenate([mesh for mesh in data["target_traj"]])
+            # meshes.export("tmp/mesh.obj")
+            # pdb.set_trace()
+
             # control reference
             control_ref = data["control_ref"][frame]
             merged_mesh = merge_mesh(control_ref, target)

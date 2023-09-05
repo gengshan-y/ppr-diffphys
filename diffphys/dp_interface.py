@@ -229,14 +229,14 @@ class phys_interface(phys_model):
         foot_height = state_body_q[:, :, kp_idxs, 1]
         return foot_height
 
-    def correct_foot_position(self, increment=0.01):
+    def correct_foot_position(self, frame_ids, increment=0.01):
         # make sure foot is above the ground by changing object scale
         self.reinit_envs(1, frames_per_wdw=self.frame_offset_raw[-1], is_eval=True)
         while True:
             self.object_field.logscale.data += increment
             self.kinematics_proxy.object_field.logscale.data += increment
             self.kinematics_distilled.object_field.logscale.data += increment
-            frame_ids = torch.arange(self.total_frames, device=self.device)
+            frame_ids = torch.tensor(frame_ids, device=self.device)
             batch = self.query_kinematics_groundtruth(frame_ids[None])
             _, _, target_trajs = self.fk_pos_vel(
                 batch["target_q"],
