@@ -104,8 +104,10 @@ class phys_model(nn.Module):
             self.joint_attach_kd = 200.0
             kp = 660.0
             kd = 5.0
-            shape_ke = 1000
-            shape_kd = 100
+            shape_ke = 1.0e4
+            shape_kd = 0
+            # shape_ke = 1000
+            # shape_kd = 100
             # kp=20.
             # kd=2.
         else:

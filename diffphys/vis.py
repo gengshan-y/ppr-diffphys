@@ -13,6 +13,7 @@ import sys
 
 sys.path.insert(0, "%s/../../" % os.path.join(os.path.dirname(__file__)))
 from diffphys.io import save_vid
+from lab4d.utils.mesh_render_utils import PyRenderWrapper
 
 
 def merge_mesh(mesh_solid, mesh_transparent):
@@ -34,6 +35,7 @@ class Logger:
         logname = "%s-%s" % (opts["seqname"], opts["logname"])
         self.save_dir = os.path.join(opts["logroot"], logname)
         self.log = SummaryWriter(self.save_dir, comment=opts["logname"])
+        self.create_floor_mesh()
 
     def show(self, tag, data, fps=10):
         """
@@ -61,13 +63,19 @@ class Logger:
         if "img_size" in data.keys():
             img_size = data["img_size"]
             img_size = (
-                img_size[0] * img_size[2],
-                img_size[1] * img_size[2],
+                int(img_size[0] * img_size[2]),
+                int(img_size[1] * img_size[2]),
                 img_size[2],
             )
         else:
             img_size = (640, 640, 1)
-        self.renderer = pyrender.OffscreenRenderer(img_size[0], img_size[1])
+        self.renderer = PyRenderWrapper(img_size[:2])  # h,w
+
+        # DEBUG
+        meshes = trimesh.util.concatenate(
+            [self.floor] + [mesh for mesh in data["target_traj"][::30]]
+        )
+        meshes.export("%s/traj-%s.obj" % (self.save_dir, tag))
 
         # loop over data
         n_frm = len(data["sim_traj"])
@@ -88,18 +96,13 @@ class Logger:
                 )
                 rtk[:3, 3] = np.asarray([0.0, 0.0, 3.0])
                 fl = max(img_size[0], img_size[1])
-                rtk[3] = np.asarray([fl, fl, img_size[0] / 2, img_size[1] / 2])
+                rtk[3] = np.asarray([fl, fl, img_size[1] / 2, img_size[0] / 2])
             camera = {"rtk": rtk}
 
             # gt mesh
             target = data["target_traj"][frame]
             img = self.render_wdw(target, camera=camera)
             self.rendered_imgs["target"].append(img)
-
-            # # DEBUG
-            # meshes = trimesh.util.concatenate([mesh for mesh in data["target_traj"]])
-            # meshes.export("tmp/mesh.obj")
-            # pdb.set_trace()
 
             # control reference
             control_ref = data["control_ref"][frame]
@@ -169,6 +172,46 @@ class Logger:
             )
         # TODO save to gltf (given bones etc.)
 
+    @staticmethod
+    def create_plane(size, offset):
+        """
+        Create a plane mesh spaning x,z axis
+        """
+        vertices = np.array(
+            [
+                [-0.5, 0, -0.5],  # vertex 0
+                [0.5, 0, -0.5],  # vertex 1
+                [0.5, 0, 0.5],  # vertex 2
+                [-0.5, 0, 0.5],  # vertex 3
+            ]
+        )
+        vertices = vertices * size + np.asarray(offset)
+
+        faces = np.array(
+            [
+                [0, 2, 1],  # triangle 0
+                [2, 0, 3],  # triangle 1
+            ]
+        )
+        mesh = trimesh.Trimesh(vertices=vertices, faces=faces)
+        return mesh
+
+    def create_floor_mesh(self):
+        # create scene
+        floor1 = self.create_plane(20, [0, 0, 0])
+        floor1.visual.vertex_colors[:, 0] = 10
+        floor1.visual.vertex_colors[:, 1] = 255
+        floor1.visual.vertex_colors[:, 2] = 102
+        floor1.visual.vertex_colors[:, 3] = 192
+
+        floor2 = self.create_plane(5, [0, 0.01, 0])
+        floor2.visual.vertex_colors[:, 0] = 10
+        floor2.visual.vertex_colors[:, 1] = 102
+        floor2.visual.vertex_colors[:, 2] = 255
+        floor2.visual.vertex_colors[:, 3] = 192
+
+        self.floor = trimesh.util.concatenate([floor1, floor2])
+
     def write_log(self, log_data, step):
         for k, v in log_data.items():
             self.log.add_scalar(k, v, step)
@@ -179,60 +222,29 @@ class Logger:
                 val = np.tile(val[:, None], (1, 3))
             val = np.clip(val, -val_max, val_max)
             mesh.vertex_colors = ((val + val_max) / val_max / 2 * 255).astype(np.uint8)
-        img = render_extra(self.renderer, mesh, camera["rtk"])
+        img = render_extra(self.renderer, mesh, self.floor, camera["rtk"])
         return img
 
 
-def render_extra(renderer, mesh, camera):
-    # create scene
-    plane_transform = np.eye(4)
-    floor1 = trimesh.primitives.Box(extents=[20, 0, 20], transform=plane_transform)
-    floor1.visual.vertex_colors[:, 0] = 10
-    floor1.visual.vertex_colors[:, 1] = 200
-    floor1.visual.vertex_colors[:, 2] = 60
-    floor1.visual.vertex_colors[:, 3] = 128
+def render_extra(renderer, mesh, scene, camera):
+    """
+    Render a mesh with a scene
 
-    plane_transform[1, 3] = 0.01
-    floor2 = trimesh.primitives.Box(extents=[5, 0, 5], transform=plane_transform)
-    floor2.visual.vertex_colors[:, 0] = 10
-    floor2.visual.vertex_colors[:, 1] = 60
-    floor2.visual.vertex_colors[:, 2] = 200
-    floor2.visual.vertex_colors[:, 3] = 128
-
-    mesh = trimesh.util.concatenate([mesh, floor1, floor2])
-
-    # mesh.export("tmp/mesh.obj")
-    # pdb.set_trace()
-
-    mesh.vertices = mesh.vertices @ camera[:3, :3].T + camera[:3, 3][None]
-    scene = pyrender.Scene(ambient_light=0.4 * np.asarray([1.0, 1.0, 1.0, 1.0]))
-    meshr = pyrender.Mesh.from_trimesh(mesh, smooth=False)
-    meshr._primitives[0].material.RoughnessFactor = 0.5
-    scene.add_node(pyrender.Node(mesh=meshr))
-
-    cam = pyrender.IntrinsicsCamera(
-        camera[3, 0], camera[3, 1], camera[3, 2], camera[3, 3], znear=1e-3, zfar=1000
-    )
-    cam_pose = -np.eye(4)
-    cam_pose[0, 0] = 1
-    cam_pose[-1, -1] = 1
-    scene.add(cam, pose=cam_pose)
-
-    direc_l = pyrender.DirectionalLight(color=np.ones(3), intensity=4.0)
-    theta = 9 * np.pi / 9
-    light_pose = np.asarray(
-        [
-            [1, 0, 0, 0],
-            [0, np.cos(theta), -np.sin(theta), 0],
-            [0, np.sin(theta), np.cos(theta), 0],
-            [0, 0, 0, 1],
-        ]
-    )
-    direc_l_node = scene.add(direc_l, pose=light_pose)
-
-    color, _ = renderer.render(scene, flags=pyrender.RenderFlags.SHADOWS_DIRECTIONAL)
-
-    # color, _ = renderer.render(scene,flags=pyrender.RenderFlags.SHADOWS_DIRECTIONAL | pyrender.RenderFlags.SKIP_CULL_FACES)
-    # cv2.imwrite("tmp/0.jpg", color)
-    # pdb.set_trace()
+    Args:
+        renderer: PyRenderWrapper
+        mesh: trimesh
+        scene: trimesh
+        camera: (4,4) rt (3x4) k (1x4), fx,fy,px,py
+    """
+    input_dict = {}
+    mesh = trimesh.util.concatenate([mesh, scene])
+    input_dict["shape"] = mesh
+    # view camera
+    scene_to_cam = np.eye(4)
+    scene_to_cam[:3] = camera[:3]
+    renderer.set_camera(scene_to_cam)
+    # # bev camera
+    # renderer.set_camera_bev(8, gl=True)
+    renderer.set_intrinsics(camera[3])
+    color = renderer.render(input_dict)[0]
     return color

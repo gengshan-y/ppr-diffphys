@@ -223,6 +223,8 @@ def articulate_robot_rbrt(robot, rbrt, gforce=None, com=None):
         tm = trimesh.Trimesh(tm.vertices, tm.faces)  # ugly workaround for uv = []
         tm = tm.copy()
         tm.vertices = tm.vertices.dot(rmat.T) + tmat[None]
+        tm.visual.vertex_colors = tm.visual.vertex_colors
+        tm.visual.vertex_colors[:, :3] = 192
 
         # add arrow mesh
         if gforce is not None:
