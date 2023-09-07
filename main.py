@@ -86,11 +86,11 @@ def main(_):
             loss += loss_dict["total_loss"]
         loss = loss / float(opts["accu_steps"])
         model.backward(loss)
-        model.update()
-        log_data = loss_dict
-        log_data["iter_time"] = time.time() - t
-        log_data["loss"] = loss
-        vis.write_log(log_data, it)
+        grad_dict = model.update()
+        loss_dict.update(grad_dict)
+        loss_dict["iter_time"] = time.time() - t
+        loss_dict["loss"] = loss
+        vis.write_log(loss_dict, it)
 
 
 if __name__ == "__main__":

@@ -180,6 +180,11 @@ class phys_model(nn.Module):
                 # link_weight = np.min((5.0, link_weight))  # avoid too heavy
                 link_weight = 1.0
                 self.articulation_builder.body_mass[idx] = link_weight
+        else:
+            # normlize inertia
+            for idx in range(len(self.articulation_builder.body_mass)):
+                mass = self.articulation_builder.body_mass[idx]
+                self.articulation_builder.body_inertia[idx] /= mass
 
         self.n_dof = len(self.articulation_builder.joint_q) - 7
         self.n_links = len(self.articulation_builder.body_q)
@@ -392,7 +397,7 @@ class phys_model(nn.Module):
         # define a dict for (tensor_name, learning) pair
         opts = self.opts
         lr_base = opts["learning_rate"]
-        lr_explicit = lr_base * 50
+        lr_explicit = lr_base * 10
 
         param_lr_startwith = {
             "global_q": lr_explicit,
@@ -464,10 +469,11 @@ class phys_model(nn.Module):
         return params_ref_list, params_list, lr_list
 
     def update(self):
-        self.check_grad()
+        grad_dict = self.check_grad()
         self.optimizer.step()
         self.scheduler.step()
         self.optimizer.zero_grad()
+        return grad_dict
 
     def get_net_pred(self, steps_fr):
         """
@@ -872,16 +878,20 @@ class phys_model(nn.Module):
         """
         # parameters that are sensitive to large gradients
         params_list = []
+        grad_dict = {}
         for param_dict in self.params_ref_list:
             ((name, p),) = param_dict.items()
-            if p.requires_grad:
+            if p.requires_grad and p.grad is not None:
                 params_list.append(p)
+                grad = p.grad.reshape(-1).norm(2, -1)
+                grad_dict["grad/" + name] = grad
 
         grad_norm = torch.nn.utils.clip_grad_norm_(params_list, thresh)
         print("grad_norm: %.6f" % grad_norm)
         if grad_norm > thresh or grad_norm.isnan():
             print("large grad: %.2f, clear gradients" % grad_norm)
             self.clear_grad()
+        return grad_dict
 
     def clear_grad(self):
         # clear gradients
