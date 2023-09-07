@@ -70,6 +70,7 @@ class Logger:
         else:
             img_size = (640, 640, 1)
         self.renderer = PyRenderWrapper(img_size[:2])  # h,w
+        self.renderer.set_light_topdown(gl=True)
 
         # DEBUG
         meshes = trimesh.util.concatenate(
@@ -202,13 +203,13 @@ class Logger:
         floor1.visual.vertex_colors[:, 0] = 10
         floor1.visual.vertex_colors[:, 1] = 255
         floor1.visual.vertex_colors[:, 2] = 102
-        floor1.visual.vertex_colors[:, 3] = 192
+        floor1.visual.vertex_colors[:, 3] = 102
 
         floor2 = self.create_plane(5, [0, 0.01, 0])
         floor2.visual.vertex_colors[:, 0] = 10
         floor2.visual.vertex_colors[:, 1] = 102
         floor2.visual.vertex_colors[:, 2] = 255
-        floor2.visual.vertex_colors[:, 3] = 192
+        floor2.visual.vertex_colors[:, 3] = 102
 
         self.floor = trimesh.util.concatenate([floor1, floor2])
 
