@@ -132,6 +132,7 @@ class TimeMLPWrapper(TimeMLP):
         out_channels=1,
         skips=[1, 2, 3, 4],
         activation=nn.ReLU(True),
+        time_scale=1.0,
         output_scale=1.0,
     ):
         # create info map for time embedding
@@ -148,6 +149,7 @@ class TimeMLPWrapper(TimeMLP):
             num_freq_t=num_freq_t,
             skips=skips,
             activation=activation,
+            time_scale=time_scale,
         )
 
         # output layers

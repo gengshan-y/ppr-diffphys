@@ -258,19 +258,19 @@ class phys_model(nn.Module):
         )
 
     def add_nn_modules(self):
-        self.root_pose_mlp = TimeMLPOld(tscale=1.0 / self.total_frames, out_channels=6)
-        self.joint_angle_mlp = TimeMLPOld(
-            tscale=1.0 / self.total_frames, out_channels=self.n_dof
-        )
-        self.vel_mlp = TimeMLPOld(
-            tscale=1.0 / self.total_frames, out_channels=6 + self.n_dof
-        )
-        self.torque_mlp = TimeMLPOld(
-            tscale=1.0 / self.total_frames, out_channels=self.n_dof
-        )
-        self.residual_f_mlp = TimeMLPOld(
-            tscale=1.0 / self.total_frames, out_channels=6 * self.n_links
-        )
+        # self.root_pose_mlp = TimeMLPOld(tscale=1.0 / self.total_frames, out_channels=6)
+        # self.joint_angle_mlp = TimeMLPOld(
+        #     tscale=1.0 / self.total_frames, out_channels=self.n_dof
+        # )
+        # self.vel_mlp = TimeMLPOld(
+        #     tscale=1.0 / self.total_frames, out_channels=6 + self.n_dof
+        # )
+        # self.torque_mlp = TimeMLPOld(
+        #     tscale=1.0 / self.total_frames, out_channels=self.n_dof
+        # )
+        # self.residual_f_mlp = TimeMLPOld(
+        #     tscale=1.0 / self.total_frames, out_channels=6 * self.n_links
+        # )
 
         # msm = self.get_mocap_data(np.arange(self.total_frames))
         # rtmat = np.eye(4)[None].repeat(self.total_frames, 0)
@@ -280,13 +280,22 @@ class phys_model(nn.Module):
         # self.root_pose_mlp = CameraMLPWrapper(rtmat)
         # self.root_pose_mlp.mlp_init()
 
-        # self.root_pose_mlp = TimeMLPWrapper(self.total_frames, out_channels=6)
-        # self.joint_angle_mlp = TimeMLPWrapper(self.total_frames, out_channels=self.n_dof)
-        # self.vel_mlp = TimeMLPWrapper(self.total_frames, out_channels=6 + self.n_dof)
-        # self.torque_mlp = TimeMLPWrapper(self.total_frames, out_channels=self.n_dof)
-        # self.residual_f_mlp = TimeMLPWrapper(
-        #     self.total_frames, out_channels=6 * self.n_links
-        # )
+        self.root_pose_mlp = TimeMLPWrapper(
+            self.total_frames,
+            out_channels=6,
+            D=8,
+            skips=[4],
+            time_scale=0.1,
+            output_scale=0.5,
+        )
+        self.joint_angle_mlp = TimeMLPWrapper(
+            self.total_frames, out_channels=self.n_dof
+        )
+        self.vel_mlp = TimeMLPWrapper(self.total_frames, out_channels=6 + self.n_dof)
+        self.torque_mlp = TimeMLPWrapper(self.total_frames, out_channels=self.n_dof)
+        self.residual_f_mlp = TimeMLPWrapper(
+            self.total_frames, out_channels=6 * self.n_links
+        )
 
     def set_progress(self, num_iters):
         self.progress = num_iters / self.total_iters
