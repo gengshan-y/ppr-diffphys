@@ -225,6 +225,12 @@ class phys_model(nn.Module):
         self.optimizer_cache = [None, None]
         self.scheduler_cache = [None, None]
 
+        self.grad_queue = {}
+        # self.param_clip_startwith = {
+        #     "root_pose_mlp": 10.0,
+        #     "vel_mlp": 10.0,
+        # }
+
     def init_global_q(self):
         # necessary for fk
         self.frame2step = [0]
@@ -396,7 +402,7 @@ class phys_model(nn.Module):
         """
         # define a dict for (tensor_name, learning) pair
         opts = self.opts
-        lr_base = opts["learning_rate"]
+        lr_base = opts["phys_learning_rate"]
         lr_explicit = lr_base * 10
 
         param_lr_startwith = {
@@ -421,17 +427,17 @@ class phys_model(nn.Module):
         self.params_ref_list, params_list, lr_list = self.get_optimizable_param_list()
 
         self.optimizer = torch.optim.AdamW(
-            params_list, lr=opts["learning_rate"], weight_decay=1e-4
+            params_list, lr=opts["phys_learning_rate"], weight_decay=1e-4
         )
 
         self.scheduler = torch.optim.lr_scheduler.OneCycleLR(
             self.optimizer,
             lr_list,
             self.total_iters,
-            pct_start=2.0 / self.total_iters,  # use 1 iter
+            pct_start=2.0 / self.total_iters,  # warmup
             cycle_momentum=False,
             anneal_strategy="linear",
-            final_div_factor=1.0,
+            final_div_factor=1e2,
             div_factor=25,
         )
 
@@ -767,7 +773,7 @@ class phys_model(nn.Module):
         if total_loss.isnan():
             pdb.set_trace()
 
-        print("loss: %.6f / fw time: %.2f s" % (total_loss.cpu(), time.time() - beg))
+        # print("loss: %.6f / fw time: %.2f s" % (total_loss.cpu(), time.time() - beg))
         loss_dict["total_loss"] = total_loss
 
         return loss_dict
@@ -876,21 +882,64 @@ class phys_model(nn.Module):
         Args:
             thresh (float): Gradient clipping threshold
         """
-        # parameters that are sensitive to large gradients
+        # detect large gradients and reload model
         params_list = []
-        grad_dict = {}
         for param_dict in self.params_ref_list:
             ((name, p),) = param_dict.items()
             if p.requires_grad and p.grad is not None:
                 params_list.append(p)
+
+        # check individual parameters
+        grad_norm = torch.nn.utils.clip_grad_norm_(params_list, thresh)
+        if grad_norm > thresh:
+            # clear gradients
+            self.optimizer.zero_grad()
+            if get_local_rank() == 0:
+                print("large grad: %.2f, clear gradients" % grad_norm)
+            # load cached model from two rounds ago
+            if self.model_cache[0] is not None:
+                if get_local_rank() == 0:
+                    print("fallback to cached model")
+                self.model.load_state_dict(self.model_cache[0])
+                self.optimizer.load_state_dict(self.optimizer_cache[0])
+                self.scheduler.load_state_dict(self.scheduler_cache[0])
+            return {}
+
+        # clip individual parameters
+        grad_dict = {}
+        queue_length = 10
+        for param_dict in self.params_ref_list:
+            ((name, p),) = param_dict.items()
+            if p.requires_grad and p.grad is not None:
                 grad = p.grad.reshape(-1).norm(2, -1)
                 grad_dict["grad/" + name] = grad
 
-        grad_norm = torch.nn.utils.clip_grad_norm_(params_list, thresh)
-        print("grad_norm: %.6f" % grad_norm)
-        if grad_norm > thresh or grad_norm.isnan():
-            print("large grad: %.2f, clear gradients" % grad_norm)
-            self.clear_grad()
+                # # maintain a queue of grad norm, and clip outlier grads
+                # matched_strict, clip_strict = match_param_name(
+                #     name, self.param_clip_startwith, type="startwith"
+                # )
+                # if matched_strict:
+                #     scale_threshold = clip_strict
+                # else:
+                #     continue
+                scale_threshold = 5.0
+
+                # check the gradient norm
+                if name not in self.grad_queue:
+                    self.grad_queue[name] = []
+                if len(self.grad_queue[name]) > queue_length:
+                    med_grad = torch.stack(self.grad_queue[name][:-1]).median()
+                    grad_dict["grad_med/" + name] = med_grad
+                    if grad > scale_threshold * med_grad:
+                        torch.nn.utils.clip_grad_norm_(p, med_grad)
+                        if get_local_rank() == 0:
+                            print("large grad: %.2f, clear %s" % (grad, name))
+                    else:
+                        self.grad_queue[name].append(grad)
+                        self.grad_queue[name].pop(0)
+                else:
+                    self.grad_queue[name].append(grad)
+
         return grad_dict
 
     def clear_grad(self):

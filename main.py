@@ -16,7 +16,7 @@ flags.DEFINE_integer("accu_steps", 1, "how many steps to do gradient accumulatio
 flags.DEFINE_string("seqname", "shiba-haru-1002", "name of the sequence")
 flags.DEFINE_string("logroot", "logdir/", "Root directory for output files")
 flags.DEFINE_string("logname", "dynamics", "Experiment Name")
-flags.DEFINE_float("learning_rate", 5e-4, "learning rate")
+flags.DEFINE_float("phys_learning_rate", 1e-4, "learning rate")
 flags.DEFINE_integer("num_rounds", 5, "total update iterations")
 flags.DEFINE_string("urdf_template", "a1", "whether to use predefined skeleton")
 flags.DEFINE_integer("num_freq", 10, "number of freqs in fourier encoding")

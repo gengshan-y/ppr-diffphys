@@ -102,7 +102,7 @@ class phys_interface(phys_model):
         """
         # define a dict for (tensor_name, learning) pair
         opts = self.opts
-        lr_base = opts["learning_rate"]
+        lr_base = opts["phys_learning_rate"]
         lr_explicit = lr_base * 10
         lr_zero = 0.0
 
