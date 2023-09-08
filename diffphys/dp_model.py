@@ -91,8 +91,10 @@ class phys_model(nn.Module):
             self.joint_attach_kd = 200.0
             kp = 660.0
             kd = 5.0
-            shape_ke = 1000
-            shape_kd = 100
+            shape_ke = 1.0e4
+            shape_kd = 0
+            # shape_ke = 1000
+            # shape_kd = 100
             # self.joint_attach_ke = 16000.
             # self.joint_attach_kd = 100.
             # kp=220.
@@ -175,7 +177,9 @@ class phys_model(nn.Module):
                 ] /= self.articulation_builder.body_mass[idx]
 
                 # initialize link weight to a different value
-                # link_weight = 1000 * np.prod(tup)
+                # tup = self.articulation_builder.shape_geo_scale[idx]
+                # link_weight = 1e3 * np.prod(tup)
+                # print("weight of %s: %f" % (name, link_weight))
                 # link_weight = np.max((1.0, link_weight))  # avoid sim blow up
                 # link_weight = np.min((5.0, link_weight))  # avoid too heavy
                 link_weight = 1.0
@@ -282,6 +286,7 @@ class phys_model(nn.Module):
 
         self.root_pose_mlp = TimeMLPWrapper(
             self.total_frames,
+            frame_info=self.frame_info,
             out_channels=6,
             D=8,
             skips=[4],
@@ -289,12 +294,19 @@ class phys_model(nn.Module):
             output_scale=0.5,
         )
         self.joint_angle_mlp = TimeMLPWrapper(
-            self.total_frames, out_channels=self.n_dof
+            self.total_frames, frame_info=self.frame_info, out_channels=self.n_dof
         )
-        self.vel_mlp = TimeMLPWrapper(self.total_frames, out_channels=6 + self.n_dof)
-        self.torque_mlp = TimeMLPWrapper(self.total_frames, out_channels=self.n_dof)
+        self.vel_mlp = TimeMLPWrapper(
+            self.total_frames,
+            frame_info=self.frame_info,
+            out_channels=6 + self.n_dof,
+            output_scale=5.0,
+        )
+        self.torque_mlp = TimeMLPWrapper(
+            self.total_frames, frame_info=self.frame_info, out_channels=self.n_dof
+        )
         self.residual_f_mlp = TimeMLPWrapper(
-            self.total_frames, out_channels=6 * self.n_links
+            self.total_frames, frame_info=self.frame_info, out_channels=6 * self.n_links
         )
 
     def set_progress(self, num_iters):
@@ -377,6 +389,7 @@ class phys_model(nn.Module):
                 self.state_steps.append(state)
 
             self.env.collide(self.state_steps[0])  # ground contact, call it once
+            # self.env.gravity[1] = 0.0
 
             setattr(self, env_name, self.env)
             setattr(self, state_name, self.state_steps)
@@ -387,6 +400,7 @@ class phys_model(nn.Module):
 
         self.frame_offset_raw = dataloader.data_info["offset"]
         self.frame_interval = dataloader.frame_interval
+        self.frame_info = None
 
         self.total_frames = len(amp_info)
         self.steps_per_fr_interval = int(self.frame_interval / self.dt)
@@ -506,7 +520,7 @@ class phys_model(nn.Module):
         # residual force
         res_f = self.residual_f_mlp(steps_fr.reshape(-1))
         res_f = res_f.view(bs, nstep, -1, 6)
-        res_f[..., 3:6] *= 10  # rotational
+        res_f[..., :3] *= 10  # translational
         res_f = res_f.view(bs, nstep, -1)
         # res_f *= 0
 
@@ -570,9 +584,11 @@ class phys_model(nn.Module):
         target_qd_at_frame = torch.cat([target_qd, target_jad], -1)
         target_qd_at_frame = target_qd_at_frame.permute(1, 0, 2).contiguous()
         # get traget body q
+        target_qd_at_frame = convert_ppr_warp(target_qd_at_frame)
         target_body_q, target_body_qd, msm = ForwardKinematics.apply(
             target_q_at_frame, target_qd_at_frame, self.env
         )
+        target_body_qd = convert_ppr_warp(target_body_qd)
         return target_body_q, target_body_qd, msm
 
     def get_mocap_data(self, steps_fr):
@@ -626,6 +642,7 @@ class phys_model(nn.Module):
         queried_q = compose_delta(target_q, delta_q)  # delta x target
         # queried_q = delta_q  # delta x target
         queried_ja = target_ja + delta_ja
+        # queried_qd[..., :6] = queried_qd[..., :6] + target_qd
 
         ref_ja, queried_q, queried_qd, torques, res_f = self.rearrange_pred(
             queried_q, queried_ja, queried_qd, torques, res_f
@@ -697,6 +714,8 @@ class phys_model(nn.Module):
             self.norm_body_inertia[None].repeat(self.num_envs, 1, 1, 1).view(-1, 3, 3)
         ) * body_mass[..., None, None]
         body_inv_inertia = body_inertia.inverse().contiguous()
+        qd_init = convert_ppr_warp(qd_init)
+        res_fin = convert_ppr_warp(res_fin)
         sim_position, sim_velocity = ForwardWarp.apply(
             q_init,
             qd_init,
@@ -711,6 +730,7 @@ class phys_model(nn.Module):
             body_inv_inertia,
             self,
         )
+        sim_velocity = convert_ppr_warp(sim_velocity)
 
         # compute queried states
         queried_q = queried_q[self.frame2step].reshape(
@@ -720,9 +740,11 @@ class phys_model(nn.Module):
             self.frames_per_wdw, self.num_envs, -1
         )
         # get control ref body q
+        queried_qd = convert_ppr_warp(queried_qd)
         queried_position, queried_velocity, self.pid_ref = ForwardKinematics.apply(
             queried_q, queried_qd, self.env
         )
+        queried_velocity = convert_ppr_warp(queried_velocity)
         foot_height = self.get_foot_height(queried_position)
 
         # compute targets and simulated states
@@ -743,7 +765,7 @@ class phys_model(nn.Module):
         loss_dict["traj"] = reduce_loss(loss_traj, clip=True)
 
         # queried state matching loss
-        loss_pos_state = se3_loss(queried_position, target_position).mean(-1)
+        loss_pos_state = se3_loss(queried_position, sim_position.detach()).mean(-1)
         loss_pos_state[outseq_idx] = 0
         loss_dict["pos_state"] = reduce_loss(loss_pos_state)
 
@@ -754,9 +776,10 @@ class phys_model(nn.Module):
             loss_distill[outseq_idx] = 0
             loss_dict["pos_distill"] = reduce_loss(loss_distill)
 
-        # loss_vel_state = se3_loss(queried_velocity, sim_velocity).mean(-1)
-        # loss_vel_state[outseq_idx] = 0
-        # loss_dict["vel_state"] = reduce_loss(loss_vel_state)
+        # [angular,linear] => [linear,angular]
+        loss_vel_state = se3_loss(queried_velocity, sim_velocity.detach()).mean(-1)
+        loss_vel_state[outseq_idx] = 0
+        loss_dict["vel_state"] = reduce_loss(loss_vel_state)
 
         # regularization
         loss_dict["reg_torque"] = torques.pow(2).mean()
@@ -909,7 +932,7 @@ class phys_model(nn.Module):
             if self.model_cache[0] is not None:
                 if get_local_rank() == 0:
                     print("fallback to cached model")
-                self.model.load_state_dict(self.model_cache[0])
+                self.load_state_dict(self.model_cache[0])
                 self.optimizer.load_state_dict(self.optimizer_cache[0])
                 self.scheduler.load_state_dict(self.scheduler_cache[0])
             return {}
@@ -961,6 +984,14 @@ class phys_model(nn.Module):
             self.load_state_dict(self.model_cache[0])
             self.optimizer.load_state_dict(self.optimizer_cache[0])
             self.scheduler.load_state_dict(self.scheduler_cache[0])
+
+
+def convert_ppr_warp(tensor):
+    # convert linear/angular convention
+    # [linear,angular] <=> [angular,linear]
+    # apply this to qd and force
+    tensor = torch.cat([tensor[..., 3:6], tensor[..., 0:3], tensor[..., 6:]], -1)
+    return tensor
 
 
 class ForwardKinematics(torch.autograd.Function):

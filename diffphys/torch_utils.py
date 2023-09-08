@@ -126,6 +126,7 @@ class TimeMLPWrapper(TimeMLP):
     def __init__(
         self,
         num_frames,
+        frame_info=None,
         D=5,
         W=256,
         num_freq_t=6,
@@ -136,11 +137,12 @@ class TimeMLPWrapper(TimeMLP):
         output_scale=1.0,
     ):
         # create info map for time embedding
-        frame_info = {
-            "frame_offset": np.asarray([0, num_frames]),
-            "frame_mapping": list(range(num_frames)),
-            "frame_offset_raw": np.asarray([0, num_frames]),
-        }
+        if frame_info is None:
+            frame_info = {
+                "frame_offset": np.asarray([0, num_frames]),
+                "frame_mapping": list(range(num_frames)),
+                "frame_offset_raw": np.asarray([0, num_frames]),
+            }
         # xyz encoding layers
         super().__init__(
             frame_info,

@@ -25,6 +25,7 @@ class phys_interface(phys_model):
 
         self.frame_offset_raw = self.scene_field.frame_offset_raw
         self.frame_interval = model_dict["frame_interval"]
+        self.frame_info = model_dict["frame_info"]
 
         # number of observations at end points and steps in each interval
         self.total_frames = self.frame_offset_raw[-1]
@@ -194,7 +195,7 @@ class phys_interface(phys_model):
         # print("proxy object scale:", self.kinematics_proxy.object_field.logscale.exp())
         # print("proxy scene scale:", self.kinematics_proxy.scene_field.logscale.exp())
         batch = self.query_kinematics_groundtruth(steps_fr)
-        target_position, target_velocity, self.target_trajs = self.fk_pos_vel(
+        target_position, _, self.target_trajs = self.fk_pos_vel(
             batch["target_q"][:, self.frame2step],
             batch["target_ja"][:, self.frame2step],
             batch["target_qd"][:, self.frame2step],

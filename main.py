@@ -25,8 +25,8 @@ flags.DEFINE_integer("iters_per_round", 20, "iters per epoch")
 flags.DEFINE_float("ratio_phys_cycle", 1.0, "iters per epoch")
 
 flags.DEFINE_float("traj_wt", 0.01, "weight for traj matching loss")
-flags.DEFINE_float("pos_state_wt", 0.0, "weight for position matching reg")
-flags.DEFINE_float("vel_state_wt", 0.0, "weight for velocity matching reg")
+flags.DEFINE_float("pos_state_wt", 0.01, "weight for position matching reg")
+flags.DEFINE_float("vel_state_wt", 1e-4, "weight for velocity matching reg")
 flags.DEFINE_float("pos_distill_wt", 0.0, "weight for distilling proxy kienmatics")
 
 # regs
@@ -69,7 +69,7 @@ def main(_):
             vis.show(it, data, fps=1.0 / model.frame_interval)
 
             # training
-            # model.reinit_envs(100, frames_per_wdw=1,is_eval=False)
+            # model.reinit_envs(100, frames_per_wdw=2, is_eval=False)
             # model.reinit_envs(10, frames_per_wdw=8, is_eval=False)
             model.reinit_envs(10, frames_per_wdw=24, is_eval=False)
             ##TODO schedule window length
