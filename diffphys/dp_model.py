@@ -177,12 +177,12 @@ class phys_model(nn.Module):
                 ] /= self.articulation_builder.body_mass[idx]
 
                 # initialize link weight to a different value
-                # tup = self.articulation_builder.shape_geo_scale[idx]
-                # link_weight = 1e3 * np.prod(tup)
-                # print("weight of %s: %f" % (name, link_weight))
-                # link_weight = np.max((1.0, link_weight))  # avoid sim blow up
-                # link_weight = np.min((5.0, link_weight))  # avoid too heavy
-                link_weight = 1.0
+                tup = self.articulation_builder.shape_geo_scale[idx]
+                link_weight = 1e3 * np.prod(tup)
+                print("weight of %s: %f" % (name, link_weight))
+                link_weight = np.max((1.0, link_weight))  # avoid sim blow up
+                link_weight = np.min((5.0, link_weight))  # avoid too heavy
+                # link_weight = 1.0
                 self.articulation_builder.body_mass[idx] = link_weight
         else:
             # normlize inertia
