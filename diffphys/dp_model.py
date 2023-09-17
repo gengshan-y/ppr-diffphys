@@ -371,6 +371,11 @@ class phys_model(nn.Module):
             self.env = getattr(self, env_name)
             self.state_steps = getattr(self, state_name)
         else:
+            # delete old env if exists
+            if hasattr(self, env_name):
+                delattr(self, env_name)
+                delattr(self, state_name)
+
             builder = wp.sim.ModelBuilder()
             for i in range(self.num_envs):
                 builder.add_rigid_articulation(self.articulation_builder)
