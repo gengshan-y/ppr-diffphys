@@ -73,10 +73,19 @@ class Logger:
         self.renderer.set_light_topdown(gl=True)
 
         # DEBUG
-        meshes = trimesh.util.concatenate(
-            [self.floor] + [mesh for mesh in data["target_traj"][::30]]
-        )
-        meshes.export("%s/traj-%s.obj" % (self.save_dir, tag))
+        if "distilled_traj" in data.keys():
+            skip_num = len(data["distilled_traj"]) // 10  # keep 10 frames
+            traj_data = data["distilled_traj"][::skip_num]
+            floor = self.floor.copy()
+            floor.vertices *= len(traj_data) / floor.vertices[:, 0].max() / 2 * 1.2
+            meshes = [floor]
+            for idx, mesh in enumerate(traj_data):
+                mesh = mesh.copy()
+                mesh.vertices[:, 0] += 1.0 * (idx - (len(traj_data) - 1) / 2)
+                meshes.append(mesh)
+            meshes = trimesh.util.concatenate(meshes)
+
+            meshes.export("%s/distilled_traj-%s.obj" % (self.save_dir, tag))
 
         # loop over data
         n_frm = len(data["sim_traj"])

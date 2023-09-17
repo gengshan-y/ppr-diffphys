@@ -124,16 +124,17 @@ class phys_interface(phys_model):
             {
                 # "kinematics_proxy.object_field.logscale": lr_explicit,
                 # "kinematics_proxy.object_field.camera_mlp.base_quat": lr_explicit,
-                "kinematics_proxy.object_field.warp.articulation.logscale": lr_explicit,
-                "kinematics_proxy.object_field.warp.articulation.shift": lr_explicit,
-                "kinematics_proxy.object_field.warp.articulation.orient": lr_explicit,
-                "kinematics_distilled.object_field.warp.articulation.logscale": lr_explicit,
-                "kinematics_distilled.object_field.warp.articulation.shift": lr_explicit,
-                "kinematics_distilled.object_field.warp.articulation.orient": lr_explicit,
+                # "kinematics_proxy.object_field.warp.articulation.logscale": lr_explicit,
+                # "kinematics_proxy.object_field.warp.articulation.shift": lr_explicit,
+                # "kinematics_proxy.object_field.warp.articulation.orient": lr_explicit,
+                # "kinematics_distilled.object_field.warp.articulation.logscale": lr_explicit,
+                # "kinematics_distilled.object_field.warp.articulation.shift": lr_explicit,
+                # "kinematics_distilled.object_field.warp.articulation.orient": lr_explicit,
                 # "kinematics_proxy.scene_field.logscale": lr_explicit,
                 # "kinematics_proxy.scene_field.camera_mlp.base_quat": lr_explicit,
-                "object_field.logscale": lr_explicit,
+                "object_field.logscale": lr_explicit,  # includes kinematics proxy / distilled
                 "scene_field.logscale": lr_explicit,
+                "object_field.warp.articulation.logscale": lr_explicit,
             }
         )
         return param_lr_startwith, param_lr_with

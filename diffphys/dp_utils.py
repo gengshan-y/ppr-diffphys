@@ -3,6 +3,7 @@ import numpy as np
 from scipy.spatial.transform import Rotation as R
 import torch
 import dqtorch
+import cv2
 
 from diffphys.geom_utils import (
     se3_vec2mat,
@@ -171,3 +172,64 @@ def can2gym2gl(
     else:
         mesh = x_rest.copy()
     return mesh
+
+
+def parse_rtk(rtk):
+    """
+    rtk: bs,T,4,4
+    """
+    rtmat = torch.zeros_like(rtk)
+    rtmat[..., :3, :] = rtk[..., :3, :]
+    rtmat[..., -1, -1] = 1
+    kmat = torch.zeros_like(rtk[..., :3, :3])
+    kmat[..., 0, 0] = rtk[..., 3, 0]
+    kmat[..., 1, 1] = rtk[..., 3, 1]
+    kmat[..., 0, 2] = rtk[..., 3, 2]
+    kmat[..., 1, 2] = rtk[..., 3, 3]
+    kmat[..., -1, -1] = 1
+    return rtmat, kmat
+
+
+def project_bodies(bodies, rtk):
+    """
+    bodies: bs,T,K,7
+    rtk: bs,T,4,4
+    """
+    point = bodies[..., :3]
+    rtmat, kmat = parse_rtk(rtk)
+    rtmat = rtmat[..., None, :, :]
+    kmat = kmat[..., None, :, :]
+    point = torch.cat([point, torch.ones_like(point[..., :1])], -1)
+    point = rtmat @ point[..., None]
+    point = point[..., :3, :]
+    point = kmat @ point
+    point = point[..., :2, 0] / point[..., 2:3, 0]
+    return point
+
+
+def plot_curves(pts1, pts2):
+    """use opencv to plot curve over T dimension
+    pts: bs,T,K,2
+    """
+    img_size = max(pts1.max(), pts2.max()).astype(np.int32) + 1
+    img = 255 * np.ones((pts1.shape[0], img_size, img_size, 3), dtype=np.uint8)
+    plot_curve(img, pts1, (255, 0, 0))
+    plot_curve(img, pts2, (0, 255, 0))
+
+    return img
+
+
+def plot_curve(img, pts, color=(0, 0, 255)):
+    """use opencv to plot curve over T dimension
+    pts: bs,T,K,2
+    """
+    # for each bs, draw a line between two points and draw a circle at each point
+    for i in range(pts.shape[0]):
+        for j in range(pts.shape[1]):
+            for k in range(pts.shape[2]):
+                pt1 = pts[i, j, k]
+                cv2.circle(img[i], tuple(pt1), 2, color, -1)
+                if j + 1 < pts.shape[1]:
+                    pt2 = pts[i, j + 1, k]
+                    cv2.circle(img[i], tuple(pt2), 2, color, -1)
+                    cv2.line(img[i], tuple(pt1), tuple(pt2), color, 1)

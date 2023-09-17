@@ -764,6 +764,19 @@ class phys_model(nn.Module):
         loss_traj[outseq_idx] = 0
         loss_dict["traj"] = reduce_loss(loss_traj, clip=True)
 
+        # # TODO compute 2D error
+        # rtk = self.get_camera().detach()
+        # sim_2d = project_bodies(sim_position, rtk)
+        # target_2d = project_bodies(target_position, rtk)
+        # # # img = plot_curves(sim_2d.cpu().numpy(), target_2d.cpu().numpy())
+        # # img = plot_curves(sim_2d[:, :1].cpu().numpy(), target_2d[:, :1].cpu().numpy())
+        # # cv2.imwrite("tmp/test.png", img[0])
+        # loss_traj_2d = (sim_2d - target_2d).norm(2, -1).mean(-1)
+        # loss_traj_2d[outseq_idx] = 0
+        # focal_length = rtk[..., 3, 0]
+        # loss_traj_2d = loss_traj_2d / focal_length
+        # loss_dict["traj"] = loss_dict["traj"] + reduce_loss(loss_traj_2d)
+
         # queried state matching loss
         loss_pos_state = se3_loss(queried_position, sim_position.detach()).mean(-1)
         loss_pos_state[outseq_idx] = 0
@@ -874,19 +887,21 @@ class phys_model(nn.Module):
         data["com_k"] = com_k
 
         if img_size is not None:
-            # get cameras: world to view = world to object + object to view
-            # this triggers pyrender
-            obj2world = self.target_q_vis[0]
-            obj2world = se3_vec2mat(obj2world)
-            world2obj = obj2world.inverse()
-
-            obj2view = self.obj2view_vis[0]
-
-            world2view = obj2view @ world2obj
-            data["camera"] = world2view.detach().cpu().numpy()
-            data["camera"][:, 3] = self.ks_vis[0].detach().cpu().numpy()
+            data["camera"] = self.get_camera()[0].detach().cpu().numpy()
             data["img_size"] = img_size
         return data
+
+    def get_camera(self):
+        # get cameras: world to view = world to object + object to view
+        obj2world = self.target_q_vis
+        obj2world = se3_vec2mat(obj2world)
+        world2obj = obj2world.inverse()
+
+        obj2view = self.obj2view_vis
+
+        world2view = obj2view @ world2obj
+        world2view[..., 3, :] = self.ks_vis
+        return world2view
 
     def save_checkpoint(self, round_count):
         # move to the left
