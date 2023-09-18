@@ -81,6 +81,8 @@ class Logger:
             meshes = [floor]
             for idx, mesh in enumerate(traj_data):
                 mesh = mesh.copy()
+                # center mesh
+                mesh.vertices[:, 0] -= mesh.vertices[:, 0].mean()
                 mesh.vertices[:, 0] += 1.0 * (idx - (len(traj_data) - 1) / 2)
                 meshes.append(mesh)
             meshes = trimesh.util.concatenate(meshes)

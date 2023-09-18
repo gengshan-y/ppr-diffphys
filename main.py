@@ -2,6 +2,8 @@ import pdb
 import time
 from absl import app
 from absl import flags
+import torch
+import gc
 import tqdm
 
 from diffphys.dp_model import phys_model
@@ -56,6 +58,11 @@ def main(_):
     # opt
     for it in tqdm.tqdm(range(model.total_iters)):
         model.progress = it / (opts["num_rounds"] * opts["iters_per_round"])
+
+        # gc.collect()  # need to be used together with empty_cache()
+        # torch.cuda.empty_cache()
+        # print("allocated: %.2f M" % (torch.cuda.memory_allocated() / (1024**2)))
+        # print("cached: %.2f M" % (torch.cuda.memory_cached() / (1024**2)))
 
         # eval
         if it % opts["iters_per_round"] == 0:
