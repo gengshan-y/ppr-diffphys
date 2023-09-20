@@ -1,3 +1,4 @@
+import os
 import pdb
 import time
 from absl import app
@@ -7,7 +8,7 @@ import gc
 import tqdm
 
 from diffphys.dp_model import phys_model
-from diffphys.vis import Logger
+from diffphys.vis import PhysVisualizer
 from diffphys.dataloader import DataLoader
 
 # distributed data parallel
@@ -48,7 +49,9 @@ def main(_):
     opts = flags.FLAGS
     opts = opts.flag_values_dict()
 
-    vis = Logger(opts)
+    logname = "%s-%s" % (opts["seqname"], opts["logname"])
+    save_dir = os.path.join(opts["logroot"], logname)
+    vis = PhysVisualizer(save_dir)
     dataloader = DataLoader(opts)
 
     # model
@@ -67,7 +70,7 @@ def main(_):
         # eval
         if it % opts["iters_per_round"] == 0:
             # save net
-            model.save_checkpoint(round_count=it)
+            model.save_checkpoint(it)
 
             # inference
             model.reinit_envs(1, frames_per_wdw=model.total_frames, is_eval=True)

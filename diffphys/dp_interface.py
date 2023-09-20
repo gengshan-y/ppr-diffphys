@@ -327,6 +327,7 @@ class KinematicsProxy(nn.Module):
 def query_q(steps_fr, object_field, scene_field):
     """
     bs,T
+    find the transformations in the urdf scale
     urdf_to_world = (scene_to_world @ scene_to_view^-1) @ (object_to_view @ urdf_to_object)
     urdf_to_world = (urdf_to_world_R | urdf_to_world_t * view_to_object_scale / urdf_to_object_scale)
     fixed: urdf_to_object scale

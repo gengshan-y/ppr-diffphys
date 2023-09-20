@@ -29,12 +29,11 @@ def merge_mesh(mesh_solid, mesh_transparent):
     return merged_mesh
 
 
-class Logger:
-    def __init__(self, opts):
-        super(Logger, self).__init__()
-        logname = "%s-%s" % (opts["seqname"], opts["logname"])
-        self.save_dir = os.path.join(opts["logroot"], logname)
-        self.log = SummaryWriter(self.save_dir, comment=opts["logname"])
+class PhysVisualizer:
+    def __init__(self, save_dir):
+        super(PhysVisualizer, self).__init__()
+        self.save_dir = save_dir
+        self.log = SummaryWriter(self.save_dir)
         self.create_floor_mesh()
 
     def show(self, tag, data, fps=10):

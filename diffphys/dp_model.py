@@ -908,7 +908,7 @@ class phys_model(nn.Module):
         world2view[..., 3, :] = self.ks_vis
         return world2view
 
-    def save_checkpoint(self, round_count):
+    def save_checkpoint(self, steps_count):
         # move to the left
         self.model_cache[0] = self.model_cache[1]
         self.optimizer_cache[0] = self.optimizer_cache[1]
@@ -920,12 +920,15 @@ class phys_model(nn.Module):
 
         if get_local_rank() == 0:
             save_dict = self.model_cache[1]
-            param_path = "%s/ckpt_phys_%04d.pth" % (self.save_dir, round_count)
+            param_path = "%s/ckpt_phys_%04d.pth" % (self.save_dir, steps_count)
             torch.save(save_dict, param_path)
 
+            # copy to latest
+            latest_path = "%s/ckpt_phys_latest.pth" % (self.save_dir)
+            os.system("cp %s %s" % (param_path, latest_path))
             return
 
-    def load_network(self, model_path):
+    def load_checkpoint(self, model_path):
         states = torch.load(model_path, map_location="cpu")
         self.load_state_dict(states, strict=False)
 
