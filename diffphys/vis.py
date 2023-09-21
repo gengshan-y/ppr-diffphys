@@ -73,20 +73,7 @@ class PhysVisualizer:
 
         # DEBUG
         if "distilled_traj" in data.keys():
-            skip_num = len(data["distilled_traj"]) // 10  # keep 10 frames
-            traj_data = data["distilled_traj"][::skip_num]
-            floor = self.floor.copy()
-            floor.vertices *= len(traj_data) / floor.vertices[:, 0].max() / 2 * 1.2
-            meshes = [floor]
-            for idx, mesh in enumerate(traj_data):
-                mesh = mesh.copy()
-                # center mesh
-                mesh.vertices[:, 0] -= mesh.vertices[:, 0].mean()
-                mesh.vertices[:, 0] += 1.0 * (idx - (len(traj_data) - 1) / 2)
-                meshes.append(mesh)
-            meshes = trimesh.util.concatenate(meshes)
-
-            meshes.export("%s/distilled_traj-%s.obj" % (self.save_dir, tag))
+            self.visualize_trajectory(data["distilled_traj"], tag)
 
         # loop over data
         n_frm = len(data["sim_traj"])
@@ -182,6 +169,22 @@ class PhysVisualizer:
                 fps=fps,
             )
         # TODO save to gltf (given bones etc.)
+
+    def visualize_trajectory(self, traj_data, tag):
+        skip_num = len(traj_data) // 10  # keep 10 frames
+        traj_data = traj_data[::skip_num]
+        floor = self.floor.copy()
+        floor.vertices *= len(traj_data) / floor.vertices[:, 0].max() / 2 * 1.2
+        meshes = [floor]
+        for idx, mesh in enumerate(traj_data):
+            mesh = mesh.copy()
+            # center mesh
+            mesh.vertices[:, 0] -= mesh.vertices[:, 0].mean()
+            mesh.vertices[:, 0] += 1.0 * (idx - (len(traj_data) - 1) / 2)
+            meshes.append(mesh)
+        meshes = trimesh.util.concatenate(meshes)
+
+        meshes.export("%s/distilled_traj-%s.obj" % (self.save_dir, tag))
 
     @staticmethod
     def create_plane(size, offset):

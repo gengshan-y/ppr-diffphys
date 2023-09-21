@@ -792,7 +792,6 @@ class phys_model(nn.Module):
             distilled_position = self.get_distilled_kinematics(steps_fr)
             loss_distill = se3_loss(distilled_position, sim_position.detach()).mean(-1)
             loss_distill[outseq_idx] = 0
-            loss_distill = loss_distill[:, 1:]  # skip the first frame
             loss_dict["pos_distill"] = reduce_loss(loss_distill)
 
         # [angular,linear] => [linear,angular]
