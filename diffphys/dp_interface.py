@@ -288,7 +288,6 @@ class KinematicsProxy(nn.Module):
     def forward(self, x):
         out, _ = query_q(x, self.object_field, self.scene_field)
         delta_q = self.delta_root_mlp(x)
-        delta_q[..., 3:] *= 10  # make it more sensitive to root rotation changes
         out = compose_delta(out, delta_q)
         return out
 

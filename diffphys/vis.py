@@ -14,6 +14,7 @@ import sys
 sys.path.insert(0, "%s/../../" % os.path.join(os.path.dirname(__file__)))
 from diffphys.io import save_vid
 from lab4d.utils.mesh_render_utils import PyRenderWrapper
+from lab4d.utils.vis_utils import create_floor_mesh
 
 
 def merge_mesh(mesh_solid, mesh_transparent):
@@ -34,7 +35,7 @@ class PhysVisualizer:
         super(PhysVisualizer, self).__init__()
         self.save_dir = save_dir
         self.log = SummaryWriter(self.save_dir)
-        self.create_floor_mesh()
+        self.floor = create_floor_mesh()
 
     def show(self, tag, data, fps=10):
         """
@@ -185,46 +186,6 @@ class PhysVisualizer:
         meshes = trimesh.util.concatenate(meshes)
 
         meshes.export("%s/distilled_traj-%s.obj" % (self.save_dir, tag))
-
-    @staticmethod
-    def create_plane(size, offset):
-        """
-        Create a plane mesh spaning x,z axis
-        """
-        vertices = np.array(
-            [
-                [-0.5, 0, -0.5],  # vertex 0
-                [0.5, 0, -0.5],  # vertex 1
-                [0.5, 0, 0.5],  # vertex 2
-                [-0.5, 0, 0.5],  # vertex 3
-            ]
-        )
-        vertices = vertices * size + np.asarray(offset)
-
-        faces = np.array(
-            [
-                [0, 2, 1],  # triangle 0
-                [2, 0, 3],  # triangle 1
-            ]
-        )
-        mesh = trimesh.Trimesh(vertices=vertices, faces=faces)
-        return mesh
-
-    def create_floor_mesh(self):
-        # create scene
-        floor1 = self.create_plane(20, [0, 0, 0])
-        floor1.visual.vertex_colors[:, 0] = 10
-        floor1.visual.vertex_colors[:, 1] = 255
-        floor1.visual.vertex_colors[:, 2] = 102
-        floor1.visual.vertex_colors[:, 3] = 102
-
-        floor2 = self.create_plane(5, [0, 0.01, 0])
-        floor2.visual.vertex_colors[:, 0] = 10
-        floor2.visual.vertex_colors[:, 1] = 102
-        floor2.visual.vertex_colors[:, 2] = 255
-        floor2.visual.vertex_colors[:, 3] = 102
-
-        self.floor = trimesh.util.concatenate([floor1, floor2])
 
     def write_log(self, log_data, step):
         for k, v in log_data.items():
