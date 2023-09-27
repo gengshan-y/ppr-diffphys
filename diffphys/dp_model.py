@@ -134,8 +134,8 @@ class phys_model(nn.Module):
             damping=2.0,  # kd gain but was set to zero somhow
             shape_ke=shape_ke,  # collsion spring/damp/friction
             shape_kd=shape_kd,
-            shape_kf=1.0e2,
-            shape_mu=1,  # use a large value to make ground sticky
+            shape_kf=1.0e2,  # sliding friction
+            shape_mu=1,  # static: use a large value to make ground sticky
             limit_ke=0,  # useful when joints violating limits
             limit_kd=0,
         )
@@ -527,7 +527,7 @@ class phys_model(nn.Module):
         res_f = res_f.view(bs, nstep, -1, 6)
         res_f[..., :3] *= 10  # translational
         res_f = res_f.view(bs, nstep, -1)
-        # res_f *= 0
+        res_f *= 0
 
         # root pose
         # quat, trans = self.root_pose_mlp.get_vals(steps_fr.reshape(-1))
@@ -843,6 +843,7 @@ class phys_model(nn.Module):
         part_mass = self.env.body_mass.numpy()
         x_rest = self.robot.urdf
         use_urdf = True
+        body_mass = self.body_mass.cpu().numpy()
         for frame in range(len(self.sim_trajs)):
             sim_traj = self.sim_trajs[frame]
             target_traj = self.target_trajs[frame]
@@ -867,6 +868,7 @@ class phys_model(nn.Module):
                 com=com,
                 in_bullet=self.in_bullet,
                 use_urdf=use_urdf,
+                mass=body_mass,
             )
 
             x_sims.append(x_sim)

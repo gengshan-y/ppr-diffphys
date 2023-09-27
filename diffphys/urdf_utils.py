@@ -12,6 +12,9 @@ from diffphys.geom_utils import (
     fid_reindex,
 )
 from scipy.spatial.transform import Rotation as R
+from matplotlib import pyplot as plt
+
+cm = plt.get_cmap("plasma")
 
 
 def robot2parent_idx(urdf):
@@ -198,7 +201,7 @@ def articulate_robot_rbrt_batch(robot, rbrt):
     return verts_all, faces_single
 
 
-def articulate_robot_rbrt(robot, rbrt, gforce=None, com=None):
+def articulate_robot_rbrt(robot, rbrt, gforce=None, com=None, mass=None):
     """
     robot: urdfpy object
     rbrt: 13,7
@@ -224,7 +227,13 @@ def articulate_robot_rbrt(robot, rbrt, gforce=None, com=None):
         tm = tm.copy()
         tm.vertices = tm.vertices.dot(rmat.T) + tmat[None]
         tm.visual.vertex_colors = tm.visual.vertex_colors
-        tm.visual.vertex_colors[:, :3] = 192
+        if mass is not None:
+            color = cm(mass[count] / mass.max())
+            tm.visual.vertex_colors[:, 0] = color[0] * 255
+            tm.visual.vertex_colors[:, 1] = color[1] * 255
+            tm.visual.vertex_colors[:, 2] = color[2] * 255
+        else:
+            tm.visual.vertex_colors[:, :3] = 192
 
         # add arrow mesh
         if gforce is not None:
@@ -241,11 +250,11 @@ def articulate_robot_rbrt(robot, rbrt, gforce=None, com=None):
                 transform[:3, 0] = -orth2 / np.linalg.norm(orth2)
 
                 arrow = get_arrow(mag, transform)
+                arrow.visual.vertex_colors[:, 0] = 255
+                arrow.visual.vertex_colors[:, 1] = 0
+                arrow.visual.vertex_colors[:, 2] = 0
 
                 tm = trimesh.util.concatenate([tm, arrow])
-                tm.visual.vertex_colors[:, 0] = 255
-                tm.visual.vertex_colors[:, 1] = 0
-                tm.visual.vertex_colors[:, 2] = 0
 
         meshes.append(tm)
         count += 1

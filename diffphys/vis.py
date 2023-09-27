@@ -74,7 +74,8 @@ class PhysVisualizer:
 
         # DEBUG
         if "distilled_traj" in data.keys():
-            self.visualize_trajectory(data["distilled_traj"], tag)
+            self.visualize_trajectory(data["distilled_traj"], "distilled_traj-" + tag)
+        self.visualize_trajectory(data["sim_traj"], "sim_traj-" + tag)
 
         # loop over data
         n_frm = len(data["sim_traj"])
@@ -185,7 +186,7 @@ class PhysVisualizer:
             meshes.append(mesh)
         meshes = trimesh.util.concatenate(meshes)
 
-        meshes.export("%s/distilled_traj-%s.obj" % (self.save_dir, tag))
+        meshes.export("%s/%s.obj" % (self.save_dir, tag))
 
     def write_log(self, log_data, step):
         for k, v in log_data.items():

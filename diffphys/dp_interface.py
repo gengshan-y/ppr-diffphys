@@ -16,6 +16,7 @@ from diffphys.torch_utils import TimeMLPOld
 class phys_interface(phys_model):
     def __init__(self, opts, dataloader, dt=5e-4, device="cuda"):
         super(phys_interface, self).__init__(opts, dataloader, dt, device)
+        self.copy_weight = False
 
     def preset_data(self, model_dict):
         # not optimized except for the scale
@@ -43,12 +44,19 @@ class phys_interface(phys_model):
             self.joint_angle_mlp,
         )
         # distilled from physics to regularize diff rendering
-        self.kinematics_distilled = KinematicsProxy(
-            self.object_field,
-            self.scene_field,
-            self.root_pose_mlp,
-            self.joint_angle_mlp,
-        )
+        if self.copy_weight:
+            # use the same parameterzation as dvr if copy weight
+            self.kinematics_distilled = KinematicsProxy(
+                self.object_field, self.scene_field
+            )
+        else:
+            # use delta mlp if not copy weight
+            self.kinematics_distilled = KinematicsProxy(
+                self.object_field,
+                self.scene_field,
+                self.root_pose_mlp,
+                self.joint_angle_mlp,
+            )
         del self.root_pose_mlp
         del self.joint_angle_mlp
         self.root_pose_mlp = lambda x: self.kinematics_proxy(x)
@@ -115,11 +123,23 @@ class phys_interface(phys_model):
                 "intrinsics": lr_zero,
                 "kinematics_proxy.delta_root_mlp": lr_base,
                 "kinematics_proxy.delta_joint_angle_mlp": lr_base,
-                "kinematics_distilled.delta_root_mlp": lr_base,
-                "kinematics_distilled.delta_joint_angle_mlp": lr_base,
-                # "jaq_mlp": lr_base,
             }
         )
+        if self.copy_weight:
+            # update the full parameters
+            param_lr_startwith.update(
+                {
+                    "kinematics_distilled": lr_base,
+                }
+            )
+        else:
+            # only update the delta mlp
+            param_lr_startwith.update(
+                {
+                    "kinematics_distilled.delta_root_mlp": lr_base,
+                    "kinematics_distilled.delta_joint_angle_mlp": lr_base,
+                }
+            )
         param_lr_with.update(
             {
                 # "kinematics_proxy.object_field.logscale": lr_explicit,
@@ -162,12 +182,16 @@ class phys_interface(phys_model):
             batch[k] = v.reshape((bs, n_fr) + shape[1:])
         return batch
 
-    def override_states(self):
+    def override_control_ref_states(self):
         self.kinematics_proxy.override_states(self.object_field, self.scene_field)
+
+    def override_distilled_states(self):
         self.kinematics_distilled.override_states(self.object_field, self.scene_field)
 
-    # def override_states_inv(self):
-    #     self.kinematics_proxy.override_states_inv(self.object_field, self.scene_field)
+    def override_states_inv(self):
+        self.kinematics_distilled.override_states_inv(
+            self.object_field, self.scene_field
+        )
 
     def compute_frame_start(self):
         frame_start = torch.Tensor(np.random.rand(self.num_envs)).to(self.device)
@@ -231,25 +255,41 @@ class phys_interface(phys_model):
         foot_height = state_body_q[:, :, kp_idxs, 1]
         return foot_height
 
-    def correct_foot_position(self, frame_ids, increment=-0.01):
+    def get_foot_height_frame(self, frame_ids):
+        """Computes the foot height at the given frame ids
+        Args:
+            frame_ids (tensor): N
+        Returns:
+            foot_height (array): N
+        """
+        batch = self.query_kinematics_groundtruth(frame_ids[None])
+        _, _, target_trajs = self.fk_pos_vel(
+            batch["target_q"],
+            batch["target_ja"],
+            batch["target_qd"],
+            batch["target_jad"],
+        )  # numpy
+        target_trajs = np.stack(target_trajs, 0)
+        foot_height = self.get_foot_height(target_trajs[None])[0]  # N,4
+        return foot_height
+
+    def correct_foot_position(self, frame_ids, increment=0.01):
         # make sure foot is above the ground by changing object scale
         self.reinit_envs(1, frames_per_wdw=self.frame_offset_raw[-1], is_eval=True)
+        frame_ids = torch.tensor(frame_ids, device=self.device)
+
+        # get initial foot height and descent direction
+        foot_height = self.get_foot_height_frame(frame_ids)
+        direction = 1 if foot_height.min() > 0 else -1
+
         while True:
-            self.scene_field.logscale.data += increment
+            self.scene_field.logscale.data += increment * direction
             self.kinematics_proxy.scene_field.logscale.data += increment
             self.kinematics_distilled.scene_field.logscale.data += increment
-            frame_ids = torch.tensor(frame_ids, device=self.device)
-            batch = self.query_kinematics_groundtruth(frame_ids[None])
-            _, _, target_trajs = self.fk_pos_vel(
-                batch["target_q"],
-                batch["target_ja"],
-                batch["target_qd"],
-                batch["target_jad"],
-            )
-            target_trajs = np.stack(target_trajs, 0)
-            foot_height = self.get_foot_height(target_trajs[None])[0]  # N,4
+            foot_height = self.get_foot_height_frame(frame_ids)
             print("foot height:", foot_height.min())
-            if foot_height.min() > 0.0:
+            if foot_height.min() * direction < 0:
+                # when the foot crossed the ground along the descent direction
                 break
 
     def get_distilled_kinematics(self, steps_fr):
@@ -277,18 +317,21 @@ class phys_interface(phys_model):
 
 class KinematicsProxy(nn.Module):
     def __init__(
-        self, object_field, scene_field, delta_root_mlp, delta_joint_angle_mlp
+        self, object_field, scene_field, delta_root_mlp=None, delta_joint_angle_mlp=None
     ):
         super(KinematicsProxy, self).__init__()
         self.object_field = copy.deepcopy(object_field)
         self.scene_field = copy.deepcopy(scene_field)
-        self.delta_root_mlp = copy.deepcopy(delta_root_mlp)
-        self.delta_joint_angle_mlp = copy.deepcopy(delta_joint_angle_mlp)
+        if delta_root_mlp is not None:
+            self.delta_root_mlp = copy.deepcopy(delta_root_mlp)
+        if delta_joint_angle_mlp is not None:
+            self.delta_joint_angle_mlp = copy.deepcopy(delta_joint_angle_mlp)
 
     def forward(self, x):
         out, _ = query_q(x, self.object_field, self.scene_field)
-        delta_q = self.delta_root_mlp(x)
-        out = compose_delta(out, delta_q)
+        if hasattr(self, "delta_root_mlp"):
+            delta_q = self.delta_root_mlp(x)
+            out = compose_delta(out, delta_q)
         return out
 
     def override_states(self, object_field, scene_field):
@@ -320,7 +363,8 @@ class KinematicsProxy(nn.Module):
 
     def get_joint_angles(self, x):
         out = self.object_field.warp.articulation.get_vals(x, return_so3=True)
-        out = out + self.delta_joint_angle_mlp(x).view(out.shape)
+        if hasattr(self, "delta_joint_angle_mlp"):
+            out = out + self.delta_joint_angle_mlp(x).view(out.shape)
         return out
 
 
