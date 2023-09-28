@@ -14,9 +14,9 @@ from diffphys.torch_utils import TimeMLPOld
 
 
 class phys_interface(phys_model):
-    def __init__(self, opts, dataloader, dt=5e-4, device="cuda"):
+    def __init__(self, opts, dataloader, dt=5e-4, copy_weights=False, device="cuda"):
+        self.copy_weights = copy_weights
         super(phys_interface, self).__init__(opts, dataloader, dt, device)
-        self.copy_weight = False
 
     def preset_data(self, model_dict):
         # not optimized except for the scale
@@ -44,7 +44,7 @@ class phys_interface(phys_model):
             self.joint_angle_mlp,
         )
         # distilled from physics to regularize diff rendering
-        if self.copy_weight:
+        if self.copy_weights:
             # use the same parameterzation as dvr if copy weight
             self.kinematics_distilled = KinematicsProxy(
                 self.object_field, self.scene_field
@@ -125,7 +125,7 @@ class phys_interface(phys_model):
                 "kinematics_proxy.delta_joint_angle_mlp": lr_base,
             }
         )
-        if self.copy_weight:
+        if self.copy_weights:
             # update the full parameters
             param_lr_startwith.update(
                 {
@@ -284,8 +284,8 @@ class phys_interface(phys_model):
 
         while True:
             self.scene_field.logscale.data += increment * direction
-            self.kinematics_proxy.scene_field.logscale.data += increment
-            self.kinematics_distilled.scene_field.logscale.data += increment
+            self.kinematics_proxy.scene_field.logscale.data += increment * direction
+            self.kinematics_distilled.scene_field.logscale.data += increment * direction
             foot_height = self.get_foot_height_frame(frame_ids)
             print("foot height:", foot_height.min())
             if foot_height.min() * direction < 0:

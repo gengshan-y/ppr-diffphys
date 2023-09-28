@@ -172,17 +172,19 @@ class PhysVisualizer:
             )
         # TODO save to gltf (given bones etc.)
 
-    def visualize_trajectory(self, traj_data, tag):
-        skip_num = len(traj_data) // 10  # keep 10 frames
-        traj_data = traj_data[::skip_num]
+    def visualize_trajectory(self, trajs, tag):
+        skip_num = len(trajs) // 10  # keep 10 frames
+        trajs = trajs[::skip_num]
+        max_w = 2  # max width
         floor = self.floor.copy()
-        floor.vertices *= len(traj_data) / floor.vertices[:, 0].max() / 2 * 1.2
+        floor.vertices *= len(trajs) / floor.vertices[:, 0].max() / 2 * 1.2 * max_w
+
         meshes = [floor]
-        for idx, mesh in enumerate(traj_data):
+        for idx, mesh in enumerate(trajs):
             mesh = mesh.copy()
             # center mesh
             mesh.vertices[:, 0] -= mesh.vertices[:, 0].mean()
-            mesh.vertices[:, 0] += 1.0 * (idx - (len(traj_data) - 1) / 2)
+            mesh.vertices[:, 0] += max_w * (idx - (len(trajs) - 1) / 2)
             meshes.append(mesh)
         meshes = trimesh.util.concatenate(meshes)
 
