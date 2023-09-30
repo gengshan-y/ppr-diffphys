@@ -167,7 +167,7 @@ class phys_interface(phys_model):
         bs, n_fr = steps_fr.shape
         steps_fr = steps_fr.reshape(-1)
         batch = {}
-        batch["target_q"], batch["obj2view"] = query_q(
+        batch["target_q"], batch["world2view"] = query_q(
             steps_fr, self.object_field, self.scene_field
         )
         # with torch.no_grad():
@@ -228,7 +228,7 @@ class phys_interface(phys_model):
         )
 
         self.target_q_vis = batch["target_q"][:, self.frame2step].clone()
-        self.obj2view_vis = batch["obj2view"][:, self.frame2step].clone()
+        self.world2view_vis = batch["world2view"][:, self.frame2step].clone()
         self.ks_vis = batch["ks"][:, self.frame2step].clone()
 
         (
@@ -389,42 +389,39 @@ def query_q(steps_fr, object_field, scene_field):
     # query obj/scene to view (object view scale, scene view scale)
     obj_to_view = object_field.get_camera(frame_id=steps_fr.reshape(-1))
     scene_to_view = scene_field.get_camera(frame_id=steps_fr.reshape(-1))
+    scene_to_world = scene_field.get_field2world(inst_id=vidid.reshape(-1))
+    world_to_view = scene_to_view @ scene_to_world.inverse()
 
-    # urdf to object (object view scale)
+    # urdf to object (urdf scale)
     orient = object_field.warp.articulation.orient
     orient = dqtorch.quaternion_to_matrix(orient)
-    shift = object_field.warp.articulation.shift / view_to_obj_scale
+    shift = object_field.warp.articulation.shift / urdf_to_obj_scale
     urdf_to_object = torch.cat([orient, shift[..., None]], -1)
     urdf_to_object = urdf_to_object.view(1, 3, 4)
     urdf_to_object = torch.cat([urdf_to_object, obj_to_view[:1, -1:]], -2)
 
-    # urdf to view/scene (object/scene view scale)
-    urdf_to_view = obj_to_view @ urdf_to_object
-    urdf_to_scene = scene_to_view.inverse() @ urdf_to_view
+    # urdf to view/scene (urdf scale)
+    view_to_urdf_scale = view_to_obj_scale / urdf_to_obj_scale
+    obj_to_view_surdf = obj_to_view.clone()
+    obj_to_view_surdf[..., :3, 3] *= view_to_urdf_scale
+    urdf_to_view = obj_to_view_surdf @ urdf_to_object
 
-    # scene rectification
-    scene_to_world = scene_field.get_field2world(inst_id=vidid.reshape(-1))
-    urdf_to_world = scene_to_world @ urdf_to_scene
+    world_to_view_surdf = world_to_view.clone()
+    world_to_view_surdf[..., :3, 3] *= view_to_urdf_scale
+    urdf_to_world = world_to_view_surdf.inverse() @ urdf_to_view
 
     # cv to gl coords
     cv2gl = torch.eye(4, device=urdf_to_world.device)
     cv2gl[1, 1] = -1
     cv2gl[2, 2] = -1
     urdf_to_world = cv2gl[None] @ urdf_to_world
-
-    # scale: from object to urdf
-    view_to_urdf_scale = view_to_obj_scale / urdf_to_obj_scale
-    urdf_to_world = urdf_to_world.clone()
-    urdf_to_world[..., :3, 3] *= view_to_urdf_scale
-
-    urdf_to_view = urdf_to_view.clone()
-    urdf_to_view[..., :3, 3] *= view_to_urdf_scale
+    world_to_view_surdf = world_to_view_surdf @ cv2gl.T[None]
 
     # rearrange
     urdf_to_world_vec = se3_mat2vec(urdf_to_world)  # xyzw
     urdf_to_world_vec = urdf_to_world_vec.view(bs, -1)
-    urdf_to_view = urdf_to_view.clone().view(bs, 4, 4)
-    return urdf_to_world_vec, urdf_to_view
+    world_to_view_surdf = world_to_view_surdf.clone().view(bs, 4, 4)
+    return urdf_to_world_vec, world_to_view_surdf
 
 
 def query_ja(steps_fr, nerf_body_rts, env, robot):

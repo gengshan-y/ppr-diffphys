@@ -26,7 +26,7 @@ from diffphys.dp_utils import (
     compute_com,
     reduce_loss,
     se3_loss,
-    can2gym2gl,
+    articulate_robot_rbrt,
     remove_nan,
     bullet2gl,
     compose_delta,
@@ -841,8 +841,6 @@ class phys_model(nn.Module):
 
         part_com = self.env.body_com.numpy()[..., None]
         part_mass = self.env.body_mass.numpy()
-        x_rest = self.robot.urdf
-        use_urdf = True
         body_mass = self.body_mass.cpu().numpy()
         for frame in range(len(self.sim_trajs)):
             sim_traj = self.sim_trajs[frame]
@@ -855,19 +853,13 @@ class phys_model(nn.Module):
             com = compute_com(sim_traj, part_com, part_mass)
             com_k.append(compute_com(target_traj, part_com, part_mass))
 
-            x_msm = can2gym2gl(
-                x_rest, target_traj, in_bullet=self.in_bullet, use_urdf=use_urdf
-            )
-            x_control_ref = can2gym2gl(
-                x_rest, pid_ref, in_bullet=self.in_bullet, use_urdf=use_urdf
-            )
-            x_sim = can2gym2gl(
-                x_rest,
+            x_msm = articulate_robot_rbrt(self.robot.urdf, target_traj)
+            x_control_ref = articulate_robot_rbrt(self.robot.urdf, pid_ref)
+            x_sim = articulate_robot_rbrt(
+                self.robot.urdf,
                 sim_traj,
                 gforce=grf,
                 com=com,
-                in_bullet=self.in_bullet,
-                use_urdf=use_urdf,
                 mass=body_mass,
             )
 
@@ -877,9 +869,7 @@ class phys_model(nn.Module):
 
             if hasattr(self, "distilled_trajs"):
                 distilled_traj = self.distilled_trajs[frame]
-                x_distilled = can2gym2gl(
-                    x_rest, distilled_traj, in_bullet=self.in_bullet, use_urdf=use_urdf
-                )
+                x_distilled = articulate_robot_rbrt(self.robot.urdf, distilled_traj)
                 x_distilled_trajs.append(x_distilled)
         x_sims = np.stack(x_sims, 0)
         x_msms = np.stack(x_msms, 0)
@@ -901,11 +891,7 @@ class phys_model(nn.Module):
         # get cameras: world to view = world to object + object to view
         obj2world = self.target_q_vis
         obj2world = se3_vec2mat(obj2world)
-        world2obj = obj2world.inverse()
-
-        obj2view = self.obj2view_vis
-
-        world2view = obj2view @ world2obj
+        world2view = self.world2view_vis
         world2view[..., 3, :] = self.ks_vis
         return world2view
 
