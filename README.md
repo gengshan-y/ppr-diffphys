@@ -2,28 +2,33 @@
 
 Differentiable physics simulation module of PPR. 
 
-## Requrement
-- 
-
 ## Installation
 
 ### 
-Create a clean conda environment (skip if you already have one with pytorch, or have installed the [lab4d env](https://lab4d-org.github.io/lab4d/get_started/))
+Create a clean conda environment (skip if you have installed the [lab4d environment](https://lab4d-org.github.io/lab4d/get_started/))
 ```
-conda create -n ppr-diffphys python=3.9
-```
-
-Install [pytorch](https://pytorch.org/get-started/locally/) and cudatoolkit with a version matching pytorch:
+mamba create -n ppr-diffphys python=3.9
 ```
 
-conda install -c conda-forge cudatoolkit==11.8
+Install [pytorch](https://pytorch.org/get-started/locally/). Replace `mamba` with `conda` if mamba is not installed
+```
+conda install pytorch==2.0.0 torchvision==0.15.0 torchaudio==2.0.0 pytorch-cuda=11.7 -c pytorch -c nvidia
+```
+
+Install cudatoolkit with a version matching pytorch. Skip if cudatoolkit is installed
+```
+mamba install -c conda-forge cudatoolkit==11.7
 ```
 
 Then install dependencies:
 ```
 pip install -r requirements.txt
+pip install urdfpy==0.0.22 --no-deps
 ```
-You might need to prepend `CUDA_HOME=/path-to-cuda-root/`. If 
+You might need to prepend `CUDA_HOME=/path-to-cuda-root/`.
+
+# Demo
+
 
 ## Install
 `pip install open3d`
