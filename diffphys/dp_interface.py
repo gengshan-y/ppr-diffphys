@@ -4,6 +4,7 @@ import torch
 import warp as wp
 import numpy as np
 import torch.nn as nn
+import torch.nn.functional as F
 import dqtorch
 
 from diffphys.dp_model import phys_model, ForwardKinematics
@@ -121,25 +122,27 @@ class phys_interface(phys_model):
                 "object_field": lr_zero,
                 "scene_field": lr_zero,
                 "intrinsics": lr_zero,
-                "kinematics_proxy.delta_root_mlp": lr_base,
-                "kinematics_proxy.delta_joint_angle_mlp": lr_base,
+                "kinematics_distilled": lr_base,
+                "kinematics_proxy": lr_base,
+                # "kinematics_proxy.delta_root_mlp": lr_base,
+                # "kinematics_proxy.delta_joint_angle_mlp": lr_base,
             }
         )
-        if self.copy_weights:
-            # update the full parameters
-            param_lr_startwith.update(
-                {
-                    "kinematics_distilled": lr_base,
-                }
-            )
-        else:
-            # only update the delta mlp
-            param_lr_startwith.update(
-                {
-                    "kinematics_distilled.delta_root_mlp": lr_base,
-                    "kinematics_distilled.delta_joint_angle_mlp": lr_base,
-                }
-            )
+        # if self.copy_weights:
+        #     # update the full parameters
+        #     param_lr_startwith.update(
+        #         {
+        #             "kinematics_distilled": lr_base,
+        #         }
+        #     )
+        # else:
+        #     # only update the delta mlp
+        #     param_lr_startwith.update(
+        #         {
+        #             "kinematics_distilled.delta_root_mlp": lr_base,
+        #             "kinematics_distilled.delta_joint_angle_mlp": lr_base,
+        #         }
+        #     )
         param_lr_with.update(
             {
                 # "kinematics_proxy.object_field.logscale": lr_explicit,
@@ -394,6 +397,7 @@ def query_q(steps_fr, object_field, scene_field):
 
     # urdf to object (urdf scale)
     orient = object_field.warp.articulation.orient
+    orient = F.normalize(orient, 2, dim=-1)
     orient = dqtorch.quaternion_to_matrix(orient)
     shift = object_field.warp.articulation.shift / urdf_to_obj_scale
     urdf_to_object = torch.cat([orient, shift[..., None]], -1)
