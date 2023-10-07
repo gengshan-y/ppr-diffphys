@@ -59,6 +59,7 @@ class phys_model(nn.Module):
 
         self.total_iters = (
             int(opts["num_rounds"] * opts["iters_per_round"] * opts["ratio_phys_cycle"])
+            + opts["warmup_iters"]
             + 1
         )
         self.progress = 0

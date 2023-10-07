@@ -276,7 +276,7 @@ class phys_interface(phys_model):
         foot_height = self.get_foot_height(target_trajs[None])[0]  # N,4
         return foot_height
 
-    def correct_foot_position(self, frame_ids, increment=0.01):
+    def correct_scale(self, frame_ids, increment=0.01):
         # make sure foot is above the ground by changing object scale
         self.reinit_envs(1, frames_per_wdw=self.frame_offset_raw[-1], is_eval=True)
         frame_ids = torch.tensor(frame_ids, device=self.device)

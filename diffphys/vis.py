@@ -37,7 +37,7 @@ class PhysVisualizer:
         self.log = SummaryWriter(self.save_dir)
         self.floor = create_floor_mesh()
 
-    def show(self, tag, data, fps=10):
+    def show(self, tag, data, fps=10, view_mode="ref"):
         """
         sim_traj: mesh
         target_traj: mesh
@@ -71,6 +71,7 @@ class PhysVisualizer:
             img_size = (640, 640, 1)
         self.renderer = PyRenderWrapper(img_size[:2])  # h,w
         self.renderer.set_light_topdown(gl=True)
+        self.view_mode = view_mode
 
         # DEBUG
         if "distilled_traj" in data.keys():
@@ -83,7 +84,7 @@ class PhysVisualizer:
             # self.caption.text("iter:%s, frame:%04d" % (tag, frame))
             if "camera" in data.keys():
                 # process the scale
-                rtk = data["camera"][frame]
+                rtk = data["camera"][frame].copy()
                 rtk[3] *= img_size[2]
             else:
                 rtk = np.eye(4)
@@ -173,6 +174,7 @@ class PhysVisualizer:
         # TODO save to gltf (given bones etc.)
 
     def visualize_trajectory(self, trajs, tag):
+        trajs = trajs.copy()
         skip_num = len(trajs) // 10  # keep 10 frames
         trajs = trajs[::skip_num]
         max_w = 2  # max width
@@ -200,11 +202,13 @@ class PhysVisualizer:
                 val = np.tile(val[:, None], (1, 3))
             val = np.clip(val, -val_max, val_max)
             mesh.vertex_colors = ((val + val_max) / val_max / 2 * 255).astype(np.uint8)
-        img = render_extra(self.renderer, mesh, self.floor, camera["rtk"])
+        img = render_image(
+            self.renderer, mesh, self.floor, camera["rtk"], view=self.view_mode
+        )
         return img
 
 
-def render_extra(renderer, mesh, scene, camera):
+def render_image(renderer, mesh, scene, camera, view="ref"):
     """
     Render a mesh with a scene
 
@@ -217,12 +221,17 @@ def render_extra(renderer, mesh, scene, camera):
     input_dict = {}
     mesh = trimesh.util.concatenate([mesh, scene])
     input_dict["shape"] = mesh
-    # view camera
-    scene_to_cam = np.eye(4)
-    scene_to_cam[:3] = camera[:3]
-    renderer.set_camera(scene_to_cam)
-    # # bev camera
-    # renderer.set_camera_bev(8, gl=True)
+    if view == "ref":
+        # ref view camera
+        scene_to_cam = np.eye(4)
+        scene_to_cam[:3] = camera[:3]
+        renderer.set_camera(scene_to_cam)
+    elif view == "bev":
+        # bev camera
+        renderer.set_camera_bev(6, gl=True)
+    elif view == "front":
+        # frontal view
+        renderer.set_camera_frontal(6, delta=0.0, gl=True)
     renderer.set_intrinsics(camera[3])
     color = renderer.render(input_dict)[0]
     return color

@@ -23,18 +23,30 @@ def vis_kps(kps, path, binary_labels=None):
     kps.export(path)
 
 
+def resize_to_nearest_multiple(image, multiple=16):
+    height, width = image.shape[:2]
+    new_height = int(np.ceil(height / multiple) * multiple)
+    new_width = int(np.ceil(width / multiple) * multiple)
+    return cv2.resize(image, (new_width, new_height))
+
+
 def save_vid(
     outpath,
     frames,
-    suffix=".gif",
-    upsample_frame=150.0,
+    suffix=".mp4",
+    upsample_frame=0,
     fps=10,
-    is_flow=False,
     target_size=None,
 ):
-    """
-    save frames to video
-    frames:     n,h,w,1 or n.
+    """Save frames to video
+
+    Args:
+        outpath (str): Output directory
+        frames: (N, H, W, x) Frames to output
+        suffix (str): File type to save (".mp4" or ".gif")
+        upsample_frame (int): Target number of frames
+        fps (int): Target frames per second
+        target_size: If provided, (H, W) target size of frames
     """
     # convert to 150 frames
     if upsample_frame < 1:
@@ -43,8 +55,6 @@ def save_vid(
     for i in range(int(upsample_frame)):
         fid = int(i / upsample_frame * len(frames))
         frame = frames[fid]
-        if is_flow:
-            frame = flow_to_image(frame)
         if frame.max() <= 1:
             frame = frame * 255
         frame = frame.astype(np.uint8)
@@ -54,9 +64,15 @@ def save_vid(
             h, w = frame.shape[:2]
             fxy = np.sqrt(4e4 / (h * w))
             frame = cv2.resize(frame, None, fx=fxy, fy=fxy)
+
+        # resize to make divisible by marco block size = 16
+        h, w = frame.shape[:2]
+        h = int(np.ceil(h / 16) * 16)
+        w = int(np.ceil(w / 16) * 16)
+        frame = cv2.resize(frame, (w, h))
+
         frame_150.append(frame)
-    try:
-        imageio.mimsave("%s%s" % (outpath, suffix), frame_150, fps=fps)
-    except:
-        duration = len(frame_150) / fps
-        imageio.mimsave("%s%s" % (outpath, suffix), frame_150, duration=duration)
+
+    # to make divisible by 16
+    frame_150_resized = [resize_to_nearest_multiple(frame) for frame in frame_150]
+    imageio.mimsave("%s%s" % (outpath, suffix), frame_150_resized, fps=fps)
