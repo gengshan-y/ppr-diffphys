@@ -1,10 +1,31 @@
-# vidyn
+# diffphys
+
+Differentiable physics simulation module of PPR. 
+
+## Requrement
+- 
+
+## Installation
+
+### 
+Create a clean conda environment (skip if you already have one with pytorch, or have installed the [lab4d env](https://lab4d-org.github.io/lab4d/get_started/))
+```
+conda create -n ppr-diffphys python=3.9
+```
+
+Install [pytorch](https://pytorch.org/get-started/locally/) and cudatoolkit with a version matching pytorch:
+```
+
+conda install -c conda-forge cudatoolkit==11.8
+```
+
+Then install dependencies:
+```
+pip install -r requirements.txt
+```
+You might need to prepend `CUDA_HOME=/path-to-cuda-root/`. If 
 
 ## Install
-`pip install urdfpy==0.0.22; pip install networkx==2.5`
-`pip install git+https://github.com/MightyChaos/dqtorch`
-`pip install vedo==2022.2.3`
-`pip install warp==0.7.2`
 `pip install open3d`
 
 
