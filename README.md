@@ -36,35 +36,21 @@ bash run.sh
 ```
 The results will be stored in the following directory: logdir/mi-xx-0/.
 
-Visualization at 0 iteratio
+Visualization at 0 iteration (left to right: target, simulated, control reference)
 
-<video width="480" controls>
-  <source src="media/all-00000.mp4" type="video/mp4">
-</video>
-<div style="display: flex; width: 480px;">
-    <span style="flex: 1; text-align: center;">target</span>
-    <span style="flex: 1; text-align: center;">simulation</span>
-    <span style="flex: 1; text-align: center;">control reference</span>
-</div>
+https://github.com/gengshan-y/ppr-diffphys/assets/13134872/2a37c30e-1d8b-408e-8dbe-007c70a07079
 
-Visualization at 100 iteration
+Visualization at 100 iteration (left to right: target, simulated, control reference)
 
-<video width="480" controls>
-  <source src="media/all-00100.mp4" type="video/mp4">
-</video>
-<div style="display: flex; width: 480px;">
-    <span style="flex: 1; text-align: center;">target</span>
-    <span style="flex: 1; text-align: center;">simulation</span>
-    <span style="flex: 1; text-align: center;">control reference</span>
-</div>
+https://github.com/gengshan-y/ppr-diffphys/assets/13134872/bd777a4f-fd39-4b57-866f-88bec5950838
+
 
 To generate additional visualizations over iterations, execute:
 ```
 python render_intermediate.py --testdir logdir/mi-pace-0/ --data_class sim
 ```
-<video width="480" controls>
-  <source src="media/sim.mp4" type="video/mp4">
-</video>
+https://github.com/gengshan-y/ppr-diffphys/assets/13134872/6a72af32-08a0-4e48-9853-154179f668b6
+
 
 
 ## DiffRen+DiffSim
