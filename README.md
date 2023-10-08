@@ -34,7 +34,7 @@ To get results on Mocap data derived from [motion_imitation](https://github.com/
 ```
 bash run.sh
 ```
-The results will be stored in the following directory: logdir/mi-xx-0/.
+The results will be stored in the following directory: `logdir/mi-xx-0/`.
 
 Visualization at 0 iteration (left to right: target, simulated, control reference)
 

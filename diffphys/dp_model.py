@@ -462,11 +462,12 @@ class phys_model(nn.Module):
             params_list, lr=opts["phys_learning_rate"], weight_decay=1e-4
         )
 
+        total_iters = max(2, self.total_iters)
         self.scheduler = torch.optim.lr_scheduler.OneCycleLR(
             self.optimizer,
             lr_list,
-            self.total_iters,
-            pct_start=2.0 / self.total_iters,  # warmup
+            total_iters,
+            pct_start=2.0 / total_iters,  # warmup
             cycle_momentum=False,
             anneal_strategy="linear",
             final_div_factor=1e2,
