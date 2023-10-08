@@ -38,18 +38,18 @@ The results will be stored in the following directory: `logdir/mi-xx-0/`.
 
 Visualization at 0 iteration (left to right: target, simulated, control reference)
 
-https://github.com/gengshan-y/ppr-diffphys/assets/13134872/2a37c30e-1d8b-408e-8dbe-007c70a07079
+https://github.com/gengshan-y/ppr-diffphys/assets/13134872/3f64c55b-0e29-4f92-9a10-207ae983beed
 
 Visualization at 100 iteration (left to right: target, simulated, control reference)
 
-https://github.com/gengshan-y/ppr-diffphys/assets/13134872/bd777a4f-fd39-4b57-866f-88bec5950838
-
+https://github.com/gengshan-y/ppr-diffphys/assets/13134872/23dc6199-e9a5-4aa4-9926-5f535f8acd94
 
 To generate additional visualizations over iterations, execute:
 ```
 python render_intermediate.py --testdir logdir/mi-pace-0/ --data_class sim
 ```
-https://github.com/gengshan-y/ppr-diffphys/assets/13134872/6a72af32-08a0-4e48-9853-154179f668b6
+https://github.com/gengshan-y/ppr-diffphys/assets/13134872/c492bc79-f8a4-4d3c-b722-4e8e2690202d
+
 
 
 
