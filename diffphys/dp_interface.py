@@ -157,7 +157,7 @@ class phys_interface(phys_model):
                 # "kinematics_proxy.scene_field.camera_mlp.base_quat": lr_explicit,
                 "object_field.logscale": lr_explicit,  # includes kinematics proxy / distilled
                 "scene_field.logscale": lr_explicit,
-                "object_field.warp.articulation.logscale": lr_explicit,
+                # "object_field.warp.articulation.logscale": lr_explicit, # urdf-object scale is not constrained
             }
         )
         return param_lr_startwith, param_lr_with
