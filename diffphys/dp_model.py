@@ -34,8 +34,11 @@ from diffphys.dp_utils import (
 from diffphys.torch_utils import TimeMLPOld, TimeMLPWrapper, CameraMLPWrapper
 
 sys.path.append("%s/../../../../" % os.path.dirname(__file__))
-from lab4d.utils.numpy_utils import interp_wt
-from lab4d.engine.train_utils import match_param_name
+try:
+    from lab4d.utils.numpy_utils import interp_wt
+    from lab4d.engine.train_utils import match_param_name
+except:
+    from diffphys.lab4d_utils import interp_wt, match_param_name
 
 import warp as wp
 
@@ -832,6 +835,7 @@ class phys_model(nn.Module):
     def backward(self, loss):
         loss.backward()
 
+    @torch.no_grad()
     def query(self, img_size=None):
         x_sims = []
         x_msms = []

@@ -8,14 +8,17 @@ import math
 import sys, os
 
 sys.path.append("%s/../../../../" % os.path.dirname(__file__))
-from lab4d.nnutils.embedding import PosEmbedding
-from lab4d.nnutils.base import ScaleLayer
-from lab4d.nnutils.time import TimeMLP
-from lab4d.utils.quat_transform import (
-    matrix_to_quaternion,
-    quaternion_mul,
-    quaternion_translation_to_se3,
-)
+try:
+    from lab4d.nnutils.embedding import PosEmbedding
+    from lab4d.nnutils.base import ScaleLayer
+    from lab4d.nnutils.time import TimeMLP
+    from lab4d.utils.quat_transform import (
+        matrix_to_quaternion,
+        quaternion_mul,
+        quaternion_translation_to_se3,
+    )
+except:
+    from diffphys.lab4d_utils import TimeMLP, ScaleLayer
 
 
 @torch.enable_grad()

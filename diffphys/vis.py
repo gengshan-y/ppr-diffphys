@@ -10,11 +10,15 @@ import numpy as np
 from torch.utils.tensorboard import SummaryWriter
 
 import sys
+from diffphys.io import save_vid
 
 sys.path.insert(0, "%s/../../" % os.path.join(os.path.dirname(__file__)))
-from diffphys.io import save_vid
-from lab4d.utils.mesh_render_utils import PyRenderWrapper
-from lab4d.utils.vis_utils import create_floor_mesh
+try:
+    from lab4d.utils.mesh_render_utils import PyRenderWrapper
+    from lab4d.utils.vis_utils import create_floor_mesh
+except:
+    from diffphys.lab4d_utils import create_floor_mesh
+    from diffphys.pyrender_wrapper import PyRenderWrapper
 
 
 def merge_mesh(mesh_solid, mesh_transparent):
