@@ -1,6 +1,7 @@
 # diffphys
 
-Differentiable physics simulation module of PPR. 
+This repo contains the differentiable physics simulation module in "PPR: Physically Plausible Reconstruction from Monocular Videos". 
+It performs motion imitation given a target trajectory by optimizing control reference, PD gains, body mass, global se3, and initial velocity.
 
 ## Installation
 
@@ -15,7 +16,7 @@ Install [pytorch](https://pytorch.org/get-started/locally/). Replace `mamba` wit
 conda install pytorch==2.0.0 torchvision==0.15.0 torchaudio==2.0.0 pytorch-cuda=11.7 -c pytorch -c nvidia
 ```
 
-Install cudatoolkit with a version matching pytorch. Skip if cudatoolkit is installed
+Install cudatoolkit with a version matching pytorch. Skip if cudatoolkit is previously installed.
 ```
 mamba install -c conda-forge cudatoolkit==11.7
 ```
@@ -25,27 +26,66 @@ Then install dependencies:
 pip install -r requirements.txt
 pip install urdfpy==0.0.22 --no-deps
 ```
-You might need to prepend `CUDA_HOME=/path-to-cuda-root/`.
+Prepend `CUDA_HOME=/path-to-cuda-root/` if `CUDA_HOME` is not found.
 
-# Demo
+## Motion Imitation on Mocap Data
 
-
-## Install
-`pip install open3d`
-
-
+To get results on Mocap data derived from [motion_imitation](https://github.com/erwincoumans/motion_imitation), execute
 ```
-env_name=lab4d
-cd /home/gengshay/miniconda3/envs/$env_name/
-cd etc/conda/
-mkdir -p activate.d
-echo "export LD_LIBRARY_PATH=/home/gengshay/miniconda3/envs/lab4d/lib/:$LD_LIBRARY_PATH" >> env_vars.sh
-chmod +x env_vars.sh
-cd ../deactivate.d/
-echo "unset LD_LIBRARY_PATH" >> env_vars.sh
-chmod +x env_vars.sh
+bash run.sh
+```
+The results will be stored in the following directory: logdir/mi-xx-0/.
+
+Visualization at 0 iteratio
+
+<video width="480" controls>
+  <source src="media/all-00000.mp4" type="video/mp4">
+</video>
+<div style="display: flex; width: 480px;">
+    <span style="flex: 1; text-align: center;">target</span>
+    <span style="flex: 1; text-align: center;">simulation</span>
+    <span style="flex: 1; text-align: center;">control reference</span>
+</div>
+
+Visualization at 100 iteration
+
+<video width="480" controls>
+  <source src="media/all-00100.mp4" type="video/mp4">
+</video>
+<div style="display: flex; width: 480px;">
+    <span style="flex: 1; text-align: center;">target</span>
+    <span style="flex: 1; text-align: center;">simulation</span>
+    <span style="flex: 1; text-align: center;">control reference</span>
+</div>
+
+To generate additional visualizations over iterations, execute:
+```
+python render_intermediate.py --testdir logdir/mi-pace-0/ --data_class sim
+```
+<video width="480" controls>
+  <source src="media/sim.mp4" type="video/mp4">
+</video>
+
+
+## DiffRen+DiffSim
+Implemented at [lab4d@ppr](https://github.com/lab4d-org/lab4d/tree/ppr).
+
+## Citation
+
+If you find this repository useful for your research, please cite the following work.
+```
+@inproceedings{yang2023ppr,
+	title={Physically Plausible Reconstruction from Monocular Videos},
+	author={Yang, Gengshan
+	and Yang, Shuo
+	and Zhang, John Z.
+	and Manchester, Zachary
+	and Ramanan, Deva},
+	booktitle = {ICCV},
+	year={2023},
+}
 ```
 
-(0) use larger skeleton to avoid blowing up
-(1) new urdf parser to deal with sperical joints => no reduncant links => 2x time steps
-(2) smaller feet mass / normal gravity / use ke=20 to avoid bouncing artefact / limit_ke, shape_mu
+## Acknowledgement
+- The differentiable physics simulation (e.g., kinematics, dynamics, contact) uses [Warp](https://github.com/NVIDIA/warp) internally. 
+- The laikago robot URDF file is taken from [TDS](https://github.com/erwincoumans/tiny-differentiable-simulator), the quadruped URDF file is converted and modified from [Mode-Adaptive Neural Networks for Quadruped Motion Control](https://github.com/sebastianstarke/AI4Animation/tree/master/AI4Animation/SIGGRAPH_2018#mode-adaptive-neural-networks-for-quadruped-motion-control), and the human URDF file is converted from [Mujoco](https://mujoco.org/).

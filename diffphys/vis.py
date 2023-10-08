@@ -79,8 +79,12 @@ class PhysVisualizer:
 
         # DEBUG
         if "distilled_traj" in data.keys():
-            self.visualize_trajectory(data["distilled_traj"], "distilled_traj-" + tag)
-        self.visualize_trajectory(data["sim_traj"], "sim_traj-" + tag)
+            self.visualize_trajectory(
+                data["distilled_traj"], "distilled_traj-" + tag, max_w=data["max_w"]
+            )
+        self.visualize_trajectory(
+            data["sim_traj"], "sim_traj-" + tag, max_w=data["max_w"]
+        )
 
         # loop over data
         n_frm = len(data["sim_traj"])
@@ -177,11 +181,10 @@ class PhysVisualizer:
             )
         # TODO save to gltf (given bones etc.)
 
-    def visualize_trajectory(self, trajs, tag):
+    def visualize_trajectory(self, trajs, tag, max_w=2):
         trajs = trajs.copy()
         skip_num = len(trajs) // 10  # keep 10 frames
         trajs = trajs[::skip_num]
-        max_w = 2  # max width
         floor = self.floor.copy()
         floor.vertices *= len(trajs) / floor.vertices[:, 0].max() / 2 * 1.2 * max_w
 

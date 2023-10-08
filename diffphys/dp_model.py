@@ -10,7 +10,7 @@ from copy import deepcopy
 
 from diffphys.dataloader import parse_amp
 from diffphys.robot import URDFRobot
-from diffphys.urdf_utils import articulate_robot_rbrt_batch
+from diffphys.urdf_utils import articulate_robot_rbrt_batch, articulate_robot
 from diffphys.geom_utils import (
     se3_vec2mat,
     se3_mat2vec,
@@ -447,8 +447,8 @@ class phys_model(nn.Module):
             "root_pose_mlp": lr_base,
             "joint_angle_mlp": lr_base,
             "vel_mlp": lr_base,
-            "torque_mlp": lr_base,
-            "residual_f_mlp": lr_base,
+            "torque_mlp": lr_base,  # not used
+            "residual_f_mlp": lr_base,  # not used
         }
         param_lr_with = {
             "root_pose_mlp.base_quat": lr_explicit,
@@ -890,6 +890,10 @@ class phys_model(nn.Module):
         if img_size is not None:
             data["camera"] = self.get_camera()[0].detach().cpu().numpy()
             data["img_size"] = img_size
+
+        # max_w
+        robot_mesh = articulate_robot(self.robot.urdf, use_collision=True)
+        data["max_w"] = 3 * np.abs(robot_mesh.vertices[:, [0, 2]]).max()
         return data
 
     def get_camera(self):
