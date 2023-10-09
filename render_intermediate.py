@@ -16,7 +16,7 @@ if cwd not in sys.path:
     sys.path.insert(0, cwd)
 try:
     from lab4d.utils.io import save_vid
-    from lab4d.utils.mesh_render_utils import PyRenderWrapper
+    from lab4d.utils.pyrender_wrapper import PyRenderWrapper
 except:
     from diffphys.io import save_vid
     from diffphys.pyrender_wrapper import PyRenderWrapper

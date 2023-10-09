@@ -14,7 +14,7 @@ from diffphys.io import save_vid
 
 sys.path.insert(0, "%s/../../" % os.path.join(os.path.dirname(__file__)))
 try:
-    from lab4d.utils.mesh_render_utils import PyRenderWrapper
+    from lab4d.utils.pyrender_wrapper import PyRenderWrapper
     from lab4d.utils.vis_utils import create_floor_mesh
 except:
     from diffphys.lab4d_utils import create_floor_mesh
