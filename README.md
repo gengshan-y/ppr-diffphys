@@ -3,6 +3,8 @@
 This repo contains the differentiable physics simulation module in "PPR: Physically Plausible Reconstruction from Monocular Videos". 
 It performs motion imitation given a target trajectory by optimizing control reference, PD gains, body mass, global se3, and initial velocity.
 
+**[[Project page]](https://gengshan-y.github.io/ppr/)**
+
 ## Installation
 
 ### 
