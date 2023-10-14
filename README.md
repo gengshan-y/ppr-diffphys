@@ -1,7 +1,7 @@
 # diffphys
 
 This repo contains the differentiable physics simulation module in "PPR: Physically Plausible Reconstruction from Monocular Videos". 
-It performs motion imitation given a target trajectory by optimizing control reference, PD gains, body mass, global se3, and initial velocity.
+It performs motion imitation given a target trajectory by optimizing control reference, PD gains, body mass, global se3, and initial velocity. For instructions on combining differentiable rendering with physics, please take a look at [PPR](https://github.com/gengshan-y/ppr).
 
 **[[Project page]](https://gengshan-y.github.io/ppr/)**
 
@@ -56,7 +56,7 @@ https://github.com/gengshan-y/ppr-diffphys/assets/13134872/c492bc79-f8a4-4d3c-b7
 
 
 ## DiffRen+DiffSim
-Implemented at [lab4d@ppr](https://github.com/lab4d-org/lab4d/tree/ppr).
+Implemented at [lab4d@ppr](https://github.com/lab4d-org/lab4d/tree/ppr). Please see [PPR](https://github.com/gengshan-y/ppr) for instructions.
 
 ## Citation
 
