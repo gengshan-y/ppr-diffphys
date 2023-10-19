@@ -27,6 +27,7 @@ flags.DEFINE_integer("num_freq", 10, "number of freqs in fourier encoding")
 flags.DEFINE_integer("t_embed_dim", 128, "dimension of the pose code")
 flags.DEFINE_integer("iters_per_round", 20, "iters per epoch")
 flags.DEFINE_float("ratio_phys_cycle", 1.0, "iters per epoch")
+flags.DEFINE_float("noise_std", 2e-3, "noise std added to initial states")
 
 flags.DEFINE_float("traj_wt", 0.01, "weight for traj matching loss")
 flags.DEFINE_float("pos_state_wt", 0.01, "weight for position matching reg")
@@ -35,7 +36,7 @@ flags.DEFINE_float("pos_distill_wt", 0.0, "weight for distilling proxy kienmatic
 
 # regs
 flags.DEFINE_float("reg_torque_wt", 0.0, "weight for torque regularization")
-flags.DEFINE_float("reg_res_f_wt", 2e-5, "weight for residual force regularization")
+flags.DEFINE_float("reg_res_f_wt", 0.0, "weight for residual force regularization")
 flags.DEFINE_float("reg_foot_wt", 0.0, "weight for foot contact regularization")
 flags.DEFINE_float("reg_root_wt", 0.0, "weight for root pose regularization")
 

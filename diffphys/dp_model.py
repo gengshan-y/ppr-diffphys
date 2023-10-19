@@ -68,6 +68,7 @@ class phys_model(nn.Module):
         self.progress = 0
 
         self.dt = dt
+        self.noise_std = opts["noise_std"]
         self.device = device
         self.preset_data(dataloader)
 
@@ -696,14 +697,17 @@ class phys_model(nn.Module):
         q_init = queried_q[0]  # bs*7+dof
         q_init = q_init.reshape(-1)
         qd_init = queried_qd[0]
-        if self.training:
+        if self.training and self.noise_std > 0:
             # decrease to zero when progress = 2/3
             noise_ratio = np.clip(1 - 1.5 * self.progress, 0, 1)
-            q_init_noise = np.random.normal(size=q_init.shape, scale=0.01 * noise_ratio)
+            q_init_noise = np.random.normal(
+                size=q_init.shape, scale=self.noise_std * noise_ratio
+            )
             q_init_noise = torch.tensor(q_init_noise, device=self.device)
             # only remove the noise on root translation
             q_init_noise = q_init_noise.view(self.num_envs, -1)
             q_init_noise[:, :3] = 0
+            q_init_noise[:, 3:7] *= 5  # make noise on root rotation larger
             q_init_noise = q_init_noise.reshape(-1)
             q_init += q_init_noise
 
