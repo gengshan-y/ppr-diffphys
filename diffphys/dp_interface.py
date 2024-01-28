@@ -287,15 +287,15 @@ class phys_interface(phys_model):
 
         while True:
             # change scene scale
-            # self.scene_field.logscale.data += increment * direction
-            # self.kinematics_proxy.scene_field.logscale.data += increment * direction
-            # self.kinematics_distilled.scene_field.logscale.data += increment * direction
-            # change object scale if we have a metric scale scene reconstruction
-            self.object_field.logscale.data -= increment * direction
-            self.kinematics_proxy.object_field.logscale.data -= increment * direction
-            self.kinematics_distilled.object_field.logscale.data -= (
-                increment * direction
-            )
+            self.scene_field.logscale.data += increment * direction
+            self.kinematics_proxy.scene_field.logscale.data += increment * direction
+            self.kinematics_distilled.scene_field.logscale.data += increment * direction
+            ## change object scale if we have a metric scale scene reconstruction
+            #self.object_field.logscale.data -= increment * direction
+            #self.kinematics_proxy.object_field.logscale.data -= increment * direction
+            #self.kinematics_distilled.object_field.logscale.data -= (
+            #    increment * direction
+            #)
             foot_height = self.get_foot_height_frame(frame_ids)
             print("foot height:", foot_height.min())
             if foot_height.min() * direction < 0:
