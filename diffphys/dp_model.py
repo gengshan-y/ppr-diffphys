@@ -933,7 +933,7 @@ class phys_model(nn.Module):
         states = torch.load(model_path, map_location="cpu")
         self.load_state_dict(states, strict=False)
 
-    def check_grad(self, thresh=5.0):
+    def check_grad(self, thresh=10.0):
         """Check if gradients are above a threshold
 
         Args:
