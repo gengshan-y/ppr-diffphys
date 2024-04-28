@@ -15,20 +15,22 @@ mamba create -n ppr-diffphys python=3.9
 
 Install [pytorch](https://pytorch.org/get-started/locally/). Replace `mamba` with `conda` if mamba is not installed
 ```
-conda install pytorch==2.0.0 torchvision==0.15.0 torchaudio==2.0.0 pytorch-cuda=11.7 -c pytorch -c nvidia
+conda activate ppr-diffphys
+mamba install pytorch==2.0.0 torchvision==0.15.0 torchaudio==2.0.0 pytorch-cuda=11.7 -c pytorch -c nvidia
 ```
 
-Install cudatoolkit with a version matching pytorch. Skip if cudatoolkit is previously installed.
+Install cudatoolkit-dev with a version matching pytorch. Skip if it is previously installed.
 ```
-mamba install -c conda-forge cudatoolkit==11.7
+mamba install -c conda-forge cudatoolkit-dev==11.7
 ```
 
 Then install dependencies:
 ```
-pip install -r requirements.txt
+cd ppr-diffphys
+CUDA_HOME=$CONDA_PREFIX pip install -r requirements.txt
 pip install urdfpy==0.0.22 --no-deps
 ```
-Prepend `CUDA_HOME=/path-to-cuda-root/` if `CUDA_HOME` is not found.
+Replace with `CUDA_HOME=/path-to-cuda-root/` if cuda is installed elsewhere, not inside the current conda env.
 
 ## Motion Imitation on Mocap Data
 
