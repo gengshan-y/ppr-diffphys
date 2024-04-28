@@ -7,6 +7,8 @@ pyrender==0.1.45
 tqdm==4.64.1
 trimesh==3.9.43
 networkx==2.5
+lxml==5.2.1
+pycollada==0.6
 warp_lang==0.7.2
 tensorboard
 imageio[ffmpeg]
