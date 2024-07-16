@@ -12,10 +12,6 @@ from diffphys.geom_utils import (
     axis_angle_to_matrix,
     quaternion_invert,
 )
-from diffphys.urdf_utils import (
-    articulate_robot_rbrt,
-    articulate_robot,
-)
 
 
 def compose_delta(target_q, delta_root):
@@ -154,31 +150,6 @@ def bullet2gl(msm, in_bullet):
 
     msm["vel"] = (issac_to_gl @ msm["vel"][..., None])[..., 0]
     msm["avel"] = (issac_to_gl @ msm["avel"][..., None])[..., 0]
-
-
-def can2gym2gl(
-    x_rest,
-    obs,
-    gforce=None,
-    com=None,
-    in_bullet=False,
-    use_urdf=False,
-    use_angle=False,
-    mass=None,
-):
-    if use_urdf:
-        if use_angle:
-            cfg = np.asarray(obs["jang"])
-            mesh = articulate_robot(x_rest, cfg=cfg, use_collision=True)
-            rmat = R.from_quat(obs["orn"]).as_matrix()  # xyzw
-            tmat = np.asarray(obs["pos"])
-            mesh.vertices = mesh.vertices @ rmat.T + tmat[None]
-        else:
-            # need to parse sperical joints => assuming it's going over joints
-            mesh = articulate_robot_rbrt(x_rest, obs, gforce=gforce, com=com, mass=mass)
-    else:
-        mesh = x_rest.copy()
-    return mesh
 
 
 def parse_rtk(rtk):

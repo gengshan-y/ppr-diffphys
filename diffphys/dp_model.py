@@ -10,7 +10,7 @@ from copy import deepcopy
 
 from diffphys.dataloader import parse_amp
 from diffphys.robot import URDFRobot
-from diffphys.urdf_utils import articulate_robot_rbrt_batch, articulate_robot
+from diffphys.urdf_utils import articulate_robot_rbrt_batch, articulate_robot_rbrt, articulate_robot
 from diffphys.geom_utils import (
     se3_vec2mat,
     se3_mat2vec,
@@ -26,7 +26,6 @@ from diffphys.dp_utils import (
     compute_com,
     reduce_loss,
     se3_loss,
-    articulate_robot_rbrt,
     remove_nan,
     bullet2gl,
     compose_delta,

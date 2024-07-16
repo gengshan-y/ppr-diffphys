@@ -179,14 +179,23 @@ def se3_vec2mat(vec):
     return mat
 
 def se3_mat2rt(mat):
+    """Convert an SE(3) 4x4 matrix into rotation matrix and translation.
+
+    Args:
+        mat: (..., 4, 4) SE(3) matrix
+    Returns:
+        rmat: (..., 3, 3) Rotation
+        tmat: (..., 3) Translation
     """
-    numpy function
-    mat: ...,4,4
-    rmat: ...,3,3
-    tmat: ...,3
-    """
-    rmat = mat[...,:3,:3]
-    tmat = mat[...,:3,3]
+    rmat = mat[..., :3, :3]
+    tmat = mat[..., :3, 3]
+
+    if torch.is_tensor(mat):
+        rmat = rmat.clone()
+        tmat = tmat.clone()
+    else:
+        rmat = rmat.copy()
+        tmat = tmat.copy()
     return rmat, tmat
 
 def se3_mat2vec(mat, outdim=7):
